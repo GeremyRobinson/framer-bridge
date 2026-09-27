@@ -1,0 +1,109 @@
+name: Framer Bridge sync
+
+# Installed by Framer Bridge. Mirrors the published Framer site named in
+# .framer-bridge.json onto GitHub Pages.
+#
+# Every 15 minutes it checks whether the Framer site was republished, and if
+# so re-exports it with tools/framer-export.mjs and deploys the result. It
+# also runs on every push to main and from the Actions tab ("Run workflow").
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check Framer
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ github.event_name != 'schedule' || steps.seen.outputs.cache-hit != 'true' }}
+      fingerprint: ${{ steps.fp.outputs.fingerprint }}
+      framer_url: ${{ steps.fp.outputs.framer_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .framer-bridge.json
+          sparse-checkout-cone-mode: false
+      - name: Fingerprint the published Framer site
+        id: fp
+        run: |
+          url=$(jq -r '.framerUrl' .framer-bridge.json)
+          url=${url%/}
+          echo "framer_url=$url" >> "$GITHUB_OUTPUT"
+          # Framer gives every published build new hashed script names, so the
+          # set of asset URLs on the homepage plus the sitemap changes on publish.
+          html=$(curl -fsSL "$url/")
+          sitemap=$(curl -fsSL "$url/sitemap.xml" || true)
+          fp=$( { echo "$html" | grep -oE 'https://[a-z.]*framerusercontent\.com/[^"'"'"' )]+' | sort -u; echo "$sitemap"; } | sha256sum | cut -c1-16)
+          echo "fingerprint=$fp" >> "$GITHUB_OUTPUT"
+          echo "Framer site $url fingerprint: $fp"
+      - name: Check whether this version is already published
+        id: seen
+        uses: actions/cache/restore@v4
+        with:
+          path: .framer-fingerprint
+          key: framer-${{ steps.fp.outputs.fingerprint }}
+          lookup-only: true
+
+  build:
+    name: Export
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Export the Framer site
+        run: |
+          # On a custom domain or a <user>.github.io repo the site is served
+          # from the domain root; otherwise from /<repo>/.
+          repo="${{ github.event.repository.name }}"
+          domain=$(jq -r '.domain // empty' .framer-bridge.json)
+          base="/$repo/"
+          if [ -n "$domain" ]; then base="/"; fi
+          case "$repo" in *.github.io) base="/" ;; esac
+          node tools/framer-export.mjs "${{ needs.check.outputs.framer_url }}" --base-path "$base" --out _site
+      - name: Check the export before publishing
+        run: |
+          cat _site/export-report.json
+          # Don't replace a working site with a broken export.
+          node -e '
+            const r = require("./_site/export-report.json");
+            const pageFailures = r.failures.filter((f) => f.includes("(page"));
+            if (!r.pages.includes("index.html")) throw new Error("homepage missing from export");
+            if (pageFailures.length) throw new Error("pages failed: " + pageFailures.join(", "));
+            console.log(`OK: ${r.pages.length} pages, ${r.files} files`);
+          '
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Remember this version as published
+        run: echo "${{ needs.check.outputs.fingerprint }}" > .framer-fingerprint
+      - uses: actions/cache/save@v4
+        with:
+          path: .framer-fingerprint
+          key: framer-${{ needs.check.outputs.fingerprint }}

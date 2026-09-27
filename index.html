@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Framer Bridge</title>
+  <meta name="description" content="Publish in Framer, host on GitHub. Framer Bridge keeps a GitHub Pages copy of your Framer site in sync.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23111'/%3E%3Ccircle cx='10' cy='16' r='4' fill='%2334d399'/%3E%3Ccircle cx='22' cy='16' r='4' fill='%23fff'/%3E%3Crect x='12' y='15' width='8' height='2' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"><i></i><b></b><i></i></span>
+      Framer Bridge
+    </div>
+    <div id="account" class="account" hidden>
+      <img id="avatar" alt="">
+      <span id="login"></span>
+      <button id="signout" class="ghost small">Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Sign in -->
+    <section id="view-signin" class="view" hidden>
+      <div class="hero">
+        <h1>Design in Framer.<br>Host on GitHub.</h1>
+        <p class="lede">Connect a published Framer site to a GitHub repository. Every time you publish in Framer, the GitHub copy updates itself within about 15 minutes.</p>
+      </div>
+      <form id="signin-form" class="panel narrow">
+        <h2>Connect your GitHub account</h2>
+        <ol class="steps-plain">
+          <li><a id="token-link" target="_blank" rel="noopener">Create a GitHub token</a> with the <code>repo</code> and <code>workflow</code> boxes ticked (the link pre-fills them).</li>
+          <li>Paste it here.</li>
+        </ol>
+        <label for="token">GitHub token</label>
+        <input id="token" type="password" autocomplete="off" placeholder="ghp_…" required>
+        <p class="hint">Stored only in this browser. Framer Bridge has no server: it talks to GitHub directly.</p>
+        <p id="signin-error" class="error" hidden></p>
+        <button type="submit" class="primary">Continue</button>
+      </form>
+    </section>
+
+    <!-- Dashboard -->
+    <section id="view-dashboard" class="view" hidden>
+      <div class="dash-head">
+        <div>
+          <h1>Projects</h1>
+          <p class="muted" id="dash-sub">Framer sites mirrored to GitHub Pages.</p>
+        </div>
+        <div class="dash-actions">
+          <button id="refresh" class="ghost" title="Refresh">Refresh</button>
+          <button id="open-connect" class="primary">Connect a project</button>
+        </div>
+      </div>
+      <div class="legend" aria-label="Status colours">
+        <span><i class="dot ok"></i>Done</span>
+        <span><i class="dot busy"></i>Working</span>
+        <span><i class="dot idle"></i>Nothing to do</span>
+        <span><i class="dot err"></i>Needs attention</span>
+      </div>
+      <div id="projects" class="projects"></div>
+      <div id="empty" class="panel empty" hidden>
+        <h2>No projects yet</h2>
+        <p class="muted">Connect a published Framer site to a GitHub repository to get started.</p>
+        <button class="primary" data-action="connect">Connect a project</button>
+      </div>
+      <p id="scan-status" class="muted small center"></p>
+    </section>
+  </main>
+
+  <!-- Connect dialog -->
+  <dialog id="connect-dialog">
+    <form id="connect-form" method="dialog">
+      <div class="dialog-head">
+        <h2>Connect a project</h2>
+        <button type="button" class="ghost small" data-close>Close</button>
+      </div>
+
+      <div id="connect-fields">
+        <label for="framer-url">Published Framer site</label>
+        <input id="framer-url" type="url" placeholder="https://yoursite.framer.website" required>
+        <p class="hint">The address visitors see: your own domain or the free <code>.framer.website</code> one. Not the editor link.</p>
+
+        <fieldset class="seg">
+          <legend>GitHub repository</legend>
+          <label><input type="radio" name="repo-mode" value="new" checked> Create a new one</label>
+          <label><input type="radio" name="repo-mode" value="existing"> Use an existing one</label>
+        </fieldset>
+        <div id="repo-new">
+          <label for="repo-name">New repository name</label>
+          <input id="repo-name" pattern="[A-Za-z0-9._-]+" placeholder="my-site">
+          <label class="check"><input type="checkbox" id="repo-private"> Private repository <span class="hint inline">(GitHub Pages then needs a paid GitHub plan)</span></label>
+        </div>
+        <div id="repo-existing" hidden>
+          <label for="repo-select">Repository</label>
+          <select id="repo-select"></select>
+        </div>
+
+        <label for="domain">Custom domain <span class="muted">(optional)</span></label>
+        <input id="domain" placeholder="www.example.com">
+        <p class="hint">Leave empty to use <span id="default-address">username.github.io/repo</span>. With a domain, add a DNS record pointing it at <code>&lt;username&gt;.github.io</code>.</p>
+
+        <p id="connect-error" class="error" hidden></p>
+        <div class="dialog-foot">
+          <button type="button" class="ghost" data-close>Cancel</button>
+          <button type="submit" class="primary" id="connect-submit">Connect</button>
+        </div>
+      </div>
+
+      <ol id="connect-progress" class="progress" hidden></ol>
+      <div id="connect-done" class="dialog-foot" hidden>
+        <button type="button" class="primary" data-close>Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Settings dialog -->
+  <dialog id="settings-dialog">
+    <form id="settings-form" method="dialog">
+      <div class="dialog-head">
+        <h2 id="settings-title">Project settings</h2>
+        <button type="button" class="ghost small" data-close>Close</button>
+      </div>
+      <label for="set-framer-url">Published Framer site</label>
+      <input id="set-framer-url" type="url" required>
+      <label for="set-domain">Custom domain <span class="muted">(optional)</span></label>
+      <input id="set-domain" placeholder="www.example.com">
+      <p class="hint">Changing either re-exports the site.</p>
+      <p id="settings-error" class="error" hidden></p>
+      <div class="dialog-foot">
+        <button type="button" class="ghost" data-close>Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="project-tpl">
+    <article class="card">
+      <div class="card-head">
+        <div>
+          <h3 class="name"></h3>
+          <a class="framer-url muted small" target="_blank" rel="noopener"></a>
+        </div>
+        <span class="badge"></span>
+      </div>
+      <ol class="pipeline">
+        <li data-stage="framer"><i class="dot"></i><span class="stage">Framer</span><span class="state"></span></li>
+        <li data-stage="export"><i class="dot"></i><span class="stage">Update</span><span class="state"></span></li>
+        <li data-stage="deploy"><i class="dot"></i><span class="stage">Deploy</span><span class="state"></span></li>
+        <li data-stage="live"><i class="dot"></i><span class="stage">Live</span><span class="state"></span></li>
+      </ol>
+      <p class="meta muted small"></p>
+      <div class="card-actions">
+        <button class="primary small" data-action="sync">Sync now</button>
+        <a class="button ghost small live-link" target="_blank" rel="noopener">Open site</a>
+        <a class="button ghost small repo-link" target="_blank" rel="noopener">Repository</a>
+        <a class="button ghost small run-link" target="_blank" rel="noopener">Last run</a>
+        <button class="ghost small" data-action="settings">Settings</button>
+        <button class="ghost small" data-action="pause"></button>
+      </div>
+    </article>
+  </template>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
