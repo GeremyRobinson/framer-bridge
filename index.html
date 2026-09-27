@@ -3,115 +3,154 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Framer Bridge</title>
-  <meta name="description" content="Publish in Framer, host on GitHub. Framer Bridge keeps a GitHub Pages copy of your Framer site in sync.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23111'/%3E%3Ccircle cx='10' cy='16' r='4' fill='%2334d399'/%3E%3Ccircle cx='22' cy='16' r='4' fill='%23fff'/%3E%3Crect x='12' y='15' width='8' height='2' fill='%23fff'/%3E%3C/svg%3E">
+  <title>Bridge</title>
+  <meta name="description" content="Publish in Framer, host on GitHub. Bridge keeps a GitHub Pages copy of your Framer site in sync and shows it happening live.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23111'/%3E%3Cpath d='M8 20c4 0 4-8 8-8s4 8 8 8' stroke='%23fff' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='8' cy='20' r='2.6' fill='%2322c55e'/%3E%3Ccircle cx='24' cy='20' r='2.6' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <span class="logo" aria-hidden="true"><i></i><b></b><i></i></span>
-      Framer Bridge
+    <a class="brand" href="./" aria-label="Bridge">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect width="32" height="32" rx="9" class="brand-bg"/><path d="M8 20c4 0 4-8 8-8s4 8 8 8" class="brand-arc"/><circle cx="8" cy="20" r="2.6" class="brand-a"/><circle cx="24" cy="20" r="2.6" class="brand-b"/></svg>
+      Bridge
+    </a>
+    <div class="top-mid" id="top-clock" hidden>
+      <span class="live-dot"></span><span id="clock-text">Watching</span>
     </div>
     <div id="account" class="account" hidden>
       <img id="avatar" alt="">
       <span id="login"></span>
-      <button id="signout" class="ghost small">Sign out</button>
+      <button id="signout" class="chip">Sign out</button>
     </div>
   </header>
 
-  <main>
-    <!-- Sign in -->
-    <section id="view-signin" class="view" hidden>
-      <div class="hero">
-        <h1>Design in Framer.<br>Host on GitHub.</h1>
-        <p class="lede">Connect a published Framer site to a GitHub repository. Every time you publish in Framer, the GitHub copy updates itself within about 15 minutes.</p>
-      </div>
-      <form id="signin-form" class="panel narrow">
-        <h2>Connect your GitHub account</h2>
-        <ol class="steps-plain">
-          <li><a id="token-link" target="_blank" rel="noopener">Create a GitHub token</a> with the <code>repo</code> and <code>workflow</code> boxes ticked (the link pre-fills them).</li>
-          <li>Paste it here.</li>
-        </ol>
+  <!-- Sign in -->
+  <section id="view-signin" class="signin" hidden>
+    <div class="signin-copy">
+      <p class="eyebrow">Bridge</p>
+      <h1>Design in Framer.<br>Ship on GitHub.</h1>
+      <p class="lede">Bridge watches your published Framer site. The moment you publish, it exports every page, image and font and deploys it to GitHub Pages. You get to watch it happen.</p>
+      <form id="signin-form" class="signin-form">
         <label for="token">GitHub token</label>
-        <input id="token" type="password" autocomplete="off" placeholder="ghp_…" required>
-        <p class="hint">Stored only in this browser. Framer Bridge has no server: it talks to GitHub directly.</p>
+        <div class="input-row">
+          <input id="token" type="password" autocomplete="off" placeholder="ghp_…" required>
+          <button type="submit" class="btn primary">Connect</button>
+        </div>
+        <p class="hint"><a id="token-link" target="_blank" rel="noopener">Create a token</a> with <code>repo</code> and <code>workflow</code> ticked (the link pre-fills them). It stays in this browser; Bridge has no server.</p>
         <p id="signin-error" class="error" hidden></p>
-        <button type="submit" class="primary">Continue</button>
       </form>
-    </section>
+    </div>
+    <div class="signin-demo" aria-hidden="true">
+      <div class="demo-canvas">
+        <svg class="demo-wires" viewBox="0 0 520 300" preserveAspectRatio="none">
+          <path id="dw1" d="M150 62 C 170 62, 165 150, 185 150" class="wire ok"/>
+          <path id="dw2" d="M335 150 C 355 150, 350 238, 370 238" class="wire ok"/>
+          <circle r="4" class="pulse-dot"><animateMotion dur="1.6s" repeatCount="indefinite"><mpath href="#dw1"/></animateMotion></circle>
+          <circle r="4" class="pulse-dot"><animateMotion dur="1.6s" begin="0.8s" repeatCount="indefinite"><mpath href="#dw2"/></animateMotion></circle>
+        </svg>
+        <div class="demo-node" style="left:0;top:30px"><b>Framer</b><span>Published 2s ago</span></div>
+        <div class="demo-node" style="left:185px;top:118px"><b>Bridge</b><span class="mono">173 files synced</span></div>
+        <div class="demo-node" style="left:370px;top:206px"><b>GitHub Pages</b><span><i class="dot ok"></i> Live</span></div>
+      </div>
+    </div>
+  </section>
 
-    <!-- Dashboard -->
-    <section id="view-dashboard" class="view" hidden>
-      <div class="dash-head">
-        <div>
-          <h1>Projects</h1>
-          <p class="muted" id="dash-sub">Framer sites mirrored to GitHub Pages.</p>
+  <!-- App -->
+  <div id="view-app" class="app" hidden>
+    <aside class="sidebar">
+      <div class="side-head">
+        <span class="eyebrow">Projects</span>
+        <button class="chip" data-action="connect" title="Connect a Framer site">+ Connect</button>
+      </div>
+      <ul id="project-list" class="project-list"></ul>
+      <p id="scan-status" class="side-note"></p>
+    </aside>
+
+    <main class="stage">
+      <div id="stage-empty" class="stage-empty" hidden>
+        <h2>Nothing connected yet</h2>
+        <p>Connect a published Framer site to a GitHub repository. Bridge sets everything up.</p>
+        <button class="btn primary" data-action="connect">Connect a Framer site</button>
+      </div>
+
+      <div id="stage-project" hidden>
+        <div class="stage-head">
+          <div>
+            <p class="eyebrow" id="p-owner"></p>
+            <h1 id="p-name"></h1>
+          </div>
+          <div id="p-badge" class="badge"></div>
         </div>
-        <div class="dash-actions">
-          <button id="refresh" class="ghost" title="Refresh">Refresh</button>
-          <button id="open-connect" class="primary">Connect a project</button>
+        <div class="canvas-wrap" id="canvas-wrap">
+          <div class="canvas" id="canvas">
+            <svg class="wires" id="wires"></svg>
+            <div class="node" data-node="source"></div>
+            <div class="node" data-node="check"></div>
+            <div class="node" data-node="export"></div>
+            <div class="node small" data-node="skip"></div>
+            <div class="node" data-node="deploy"></div>
+            <div class="node" data-node="live"></div>
+          </div>
         </div>
       </div>
-      <div class="legend" aria-label="Status colours">
-        <span><i class="dot ok"></i>Done</span>
-        <span><i class="dot busy"></i>Working</span>
-        <span><i class="dot idle"></i>Nothing to do</span>
-        <span><i class="dot err"></i>Needs attention</span>
-      </div>
-      <div id="projects" class="projects"></div>
-      <div id="empty" class="panel empty" hidden>
-        <h2>No projects yet</h2>
-        <p class="muted">Connect a published Framer site to a GitHub repository to get started.</p>
-        <button class="primary" data-action="connect">Connect a project</button>
-      </div>
-      <p id="scan-status" class="muted small center"></p>
-    </section>
-  </main>
+    </main>
+
+    <aside class="rail" id="rail" hidden>
+      <ul class="actions">
+        <li><a id="a-view" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>View site</a></li>
+        <li><button data-action="copy"><svg viewBox="0 0 24 24"><path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/></svg><span>Copy URL</span></button></li>
+        <li><button data-action="sync"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg><span>Sync now</span></button></li>
+        <li><a id="a-repo" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/></svg>Repository</a></li>
+        <li><a id="a-run" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3"/><path d="M13 15h4"/></svg>Run log</a></li>
+        <li><button data-action="settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span>Settings</span></button></li>
+        <li><button data-action="pause"><svg viewBox="0 0 24 24" id="pause-ico"><path d="M9 5v14M15 5v14"/></svg><span id="pause-label">Pause auto-sync</span></button></li>
+      </ul>
+      <svg class="squiggle" viewBox="0 0 240 10" preserveAspectRatio="none" aria-hidden="true"><path d="M0 5 Q 7.5 0 15 5 T 30 5 T 45 5 T 60 5 T 75 5 T 90 5 T 105 5 T 120 5 T 135 5 T 150 5 T 165 5 T 180 5 T 195 5 T 210 5 T 225 5 T 240 5"/></svg>
+      <p class="eyebrow">Activity</p>
+      <ol id="activity" class="activity"></ol>
+    </aside>
+  </div>
 
   <!-- Connect dialog -->
   <dialog id="connect-dialog">
     <form id="connect-form" method="dialog">
       <div class="dialog-head">
-        <h2>Connect a project</h2>
-        <button type="button" class="ghost small" data-close>Close</button>
+        <h2>Connect a Framer site</h2>
+        <button type="button" class="chip" data-close>Close</button>
       </div>
-
       <div id="connect-fields">
         <label for="framer-url">Published Framer site</label>
         <input id="framer-url" type="url" placeholder="https://yoursite.framer.website" required>
-        <p class="hint">The address visitors see: your own domain or the free <code>.framer.website</code> one. Not the editor link.</p>
-
+        <p class="hint">The address visitors see: your domain or the free <code>.framer.website</code> one. Not the editor link.</p>
         <fieldset class="seg">
           <legend>GitHub repository</legend>
-          <label><input type="radio" name="repo-mode" value="new" checked> Create a new one</label>
-          <label><input type="radio" name="repo-mode" value="existing"> Use an existing one</label>
+          <label><input type="radio" name="repo-mode" value="new" checked><span>New</span></label>
+          <label><input type="radio" name="repo-mode" value="existing"><span>Existing</span></label>
         </fieldset>
         <div id="repo-new">
-          <label for="repo-name">New repository name</label>
-          <input id="repo-name" pattern="[A-Za-z0-9._-]+" placeholder="my-site">
-          <label class="check"><input type="checkbox" id="repo-private"> Private repository <span class="hint inline">(GitHub Pages then needs a paid GitHub plan)</span></label>
+          <label for="repo-name">Repository name</label>
+          <input id="repo-name" pattern="[A-Za-z0-9._\-]+" placeholder="my-site">
+          <label class="check"><input type="checkbox" id="repo-private"> Private <span class="hint inline">(Pages then needs a paid GitHub plan)</span></label>
         </div>
         <div id="repo-existing" hidden>
           <label for="repo-select">Repository</label>
           <select id="repo-select"></select>
         </div>
-
         <label for="domain">Custom domain <span class="muted">(optional)</span></label>
         <input id="domain" placeholder="www.example.com">
-        <p class="hint">Leave empty to use <span id="default-address">username.github.io/repo</span>. With a domain, add a DNS record pointing it at <code>&lt;username&gt;.github.io</code>.</p>
-
+        <p class="hint">Empty means <span id="default-address" class="mono">username.github.io/repo</span>. With a domain, point a DNS record at <code>&lt;username&gt;.github.io</code>.</p>
         <p id="connect-error" class="error" hidden></p>
         <div class="dialog-foot">
-          <button type="button" class="ghost" data-close>Cancel</button>
-          <button type="submit" class="primary" id="connect-submit">Connect</button>
+          <button type="button" class="btn" data-close>Cancel</button>
+          <button type="submit" class="btn primary">Connect</button>
         </div>
       </div>
-
-      <ol id="connect-progress" class="progress" hidden></ol>
+      <ol id="connect-progress" class="activity progress" hidden></ol>
       <div id="connect-done" class="dialog-foot" hidden>
-        <button type="button" class="primary" data-close>Done</button>
+        <button type="button" class="btn primary" data-close>Done</button>
       </div>
     </form>
   </dialog>
@@ -120,49 +159,23 @@
   <dialog id="settings-dialog">
     <form id="settings-form" method="dialog">
       <div class="dialog-head">
-        <h2 id="settings-title">Project settings</h2>
-        <button type="button" class="ghost small" data-close>Close</button>
+        <h2 id="settings-title">Settings</h2>
+        <button type="button" class="chip" data-close>Close</button>
       </div>
       <label for="set-framer-url">Published Framer site</label>
       <input id="set-framer-url" type="url" required>
       <label for="set-domain">Custom domain <span class="muted">(optional)</span></label>
       <input id="set-domain" placeholder="www.example.com">
-      <p class="hint">Changing either re-exports the site.</p>
+      <p class="hint">Saving re-exports the site.</p>
       <p id="settings-error" class="error" hidden></p>
       <div class="dialog-foot">
-        <button type="button" class="ghost" data-close>Cancel</button>
-        <button type="submit" class="primary">Save</button>
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
       </div>
     </form>
   </dialog>
 
-  <template id="project-tpl">
-    <article class="card">
-      <div class="card-head">
-        <div>
-          <h3 class="name"></h3>
-          <a class="framer-url muted small" target="_blank" rel="noopener"></a>
-        </div>
-        <span class="badge"></span>
-      </div>
-      <ol class="pipeline">
-        <li data-stage="framer"><i class="dot"></i><span class="stage">Framer</span><span class="state"></span></li>
-        <li data-stage="export"><i class="dot"></i><span class="stage">Update</span><span class="state"></span></li>
-        <li data-stage="deploy"><i class="dot"></i><span class="stage">Deploy</span><span class="state"></span></li>
-        <li data-stage="live"><i class="dot"></i><span class="stage">Live</span><span class="state"></span></li>
-      </ol>
-      <p class="meta muted small"></p>
-      <div class="card-actions">
-        <button class="primary small" data-action="sync">Sync now</button>
-        <a class="button ghost small live-link" target="_blank" rel="noopener">Open site</a>
-        <a class="button ghost small repo-link" target="_blank" rel="noopener">Repository</a>
-        <a class="button ghost small run-link" target="_blank" rel="noopener">Last run</a>
-        <button class="ghost small" data-action="settings">Settings</button>
-        <button class="ghost small" data-action="pause"></button>
-      </div>
-    </article>
-  </template>
-
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="app.js" type="module"></script>
 </body>
 </html>

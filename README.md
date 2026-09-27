@@ -1,4 +1,4 @@
-# Framer Bridge
+# Bridge
 
 Design in Framer, host on GitHub. Framer Bridge connects a published Framer
 site to a GitHub repository and keeps a GitHub Pages copy of it in sync.
