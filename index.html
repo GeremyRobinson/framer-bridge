@@ -192,6 +192,13 @@
       <input id="set-framer-url" class="pill mono" type="url" required>
       <label for="set-domain">Custom domain <span class="muted">(optional)</span></label>
       <input id="set-domain" class="pill mono" placeholder="www.example.com">
+      <h2 class="label set-section">Project data <span class="node-state"><i class="dot" id="set-project-dot"></i><span id="set-project-state" class="mono">checking…</span></span></h2>
+      <p class="muted">Adds the whole Framer project to the repo on every sync: pages and layers, CMS, code files, styles and images. In Framer, open the project, then Settings → API Keys.</p>
+      <label for="set-project">Framer project link</label>
+      <input id="set-project" class="pill mono" type="url" placeholder="https://framer.com/projects/…" autocomplete="off">
+      <label for="set-api-key">API key</label>
+      <input id="set-api-key" class="pill mono" type="password" placeholder="Paste to add or replace" autocomplete="off">
+      <p class="muted">Both are encrypted in this browser and stored as secrets in the repo. Bridge can't read them back.</p>
       <p class="muted">Saving re-exports the site.</p>
       <p id="settings-error" class="error" hidden></p>
       <div class="dialog-foot">

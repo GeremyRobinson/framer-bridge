@@ -10,6 +10,7 @@ const WORKFLOW_FILE = "sync.yml";
 const WORKFLOW_PATH = `.github/workflows/${WORKFLOW_FILE}`;
 const CONFIG_PATH = ".site.json";
 const EXPORTER_PATH = "tools/export.mjs";
+const PROJECT_TOOL_PATH = "tools/project.mjs";
 const LEGACY = { workflow: "framer-bridge.yml", config: ".framer-bridge.json", exporter: "tools/framer-export.mjs" };
 const TOKEN_KEY = "framer-bridge:token";
 const CACHE_KEY = "framer-bridge:projects";
@@ -875,15 +876,15 @@ this copy.
 }
 
 async function loadTemplates() {
-  const [exporter, workflow] = await Promise.all(
-    ["template/export.mjs", "template/sync.yml"].map((f) =>
+  const [exporter, workflow, project] = await Promise.all(
+    ["template/export.mjs", "template/sync.yml", "template/project.mjs"].map((f) =>
       fetch(f, { cache: "no-cache" }).then((r) => {
         if (!r.ok) throw new Error(`Couldn't load ${f}`);
         return r.text();
       })
     )
   );
-  return { exporter, workflow };
+  return { exporter, workflow, project };
 }
 
 function progressStep(text) {
@@ -954,15 +955,8 @@ async function connect(e) {
 
     step = progressStep("Installing the sync workflow");
     const config = { framerUrl, domain: domain || undefined, connectedAt: new Date().toISOString(), version: 2 };
-    const files = {
-      [WORKFLOW_PATH]: t.workflow,
-      [EXPORTER_PATH]: t.exporter,
-      [CONFIG_PATH]: configFile(config),
-    };
     // Reconnecting a repo set up with the old names replaces those files.
-    if (!isNew && (await readConfig(full).catch(() => null))?.legacy) {
-      Object.assign(files, { [`.github/workflows/${LEGACY.workflow}`]: null, [LEGACY.exporter]: null, [LEGACY.config]: null });
-    }
+    const files = installFiles(t, config, !isNew && (await readConfig(full).catch(() => null))?.legacy);
     const hasReadme = await gh(`/repos/${full}/contents/README.md`).then((f) => f.size > 60, () => false);
     if (!hasReadme) files["README.md"] = templateReadme(full, config);
     await commitFiles(full, files, `Set up automatic updates from ${host(framerUrl)}`);
@@ -996,14 +990,61 @@ function friendly(err) {
   return err.message;
 }
 
+// The design project (link + API key) lives only in the repo's Actions secrets.
+const SECRET = { project: "SITE_PROJECT", key: "SITE_API_KEY" };
+
+async function secretNames(full) {
+  const r = await gh(`/repos/${full}/actions/secrets?per_page=100`);
+  return new Set((r.secrets || []).map((s) => s.name));
+}
+
+/** Store an Actions secret, sealed in the browser with the repo's public key. */
+async function putSecret(full, name, value) {
+  const [{ key_id, key }, { seal }] = await Promise.all([
+    gh(`/repos/${full}/actions/secrets/public-key`),
+    import("./vendor/seal.js"),
+  ]);
+  const sealed = seal(new TextEncoder().encode(value), Uint8Array.from(atob(key), (c) => c.charCodeAt(0)));
+  let bin = "";
+  for (const b of sealed) bin += String.fromCharCode(b);
+  await gh(`/repos/${full}/actions/secrets/${name}`, { method: "PUT", body: { encrypted_value: btoa(bin), key_id } });
+}
+
+/** The files Bridge installs, replacing a legacy setup's files in the same commit. */
+function installFiles(t, config, legacy) {
+  const files = {
+    [WORKFLOW_PATH]: t.workflow,
+    [EXPORTER_PATH]: t.exporter,
+    [PROJECT_TOOL_PATH]: t.project,
+    [CONFIG_PATH]: configFile({ ...config, legacy: false }),
+  };
+  if (legacy) Object.assign(files, { [`.github/workflows/${LEGACY.workflow}`]: null, [LEGACY.exporter]: null, [LEGACY.config]: null });
+  return files;
+}
+
 let settingsFor = null;
+let settingsSecrets = new Set();
+function showProjectState(state, text) {
+  $("#set-project-dot").className = "dot " + state;
+  $("#set-project-state").textContent = text;
+}
 function openSettings(full) {
   const p = projects.get(full);
   settingsFor = full;
   $("#settings-title").textContent = full.split("/")[1];
   $("#set-framer-url").value = p.config.framerUrl;
   $("#set-domain").value = p.config.domain || "";
+  $("#set-project").value = "";
+  $("#set-api-key").value = "";
   $("#settings-error").hidden = true;
+  showProjectState("", "checking…");
+  settingsSecrets = new Set();
+  secretNames(full).then((names) => {
+    if (settingsFor !== full) return;
+    settingsSecrets = names;
+    const on = names.has(SECRET.project) && names.has(SECRET.key);
+    showProjectState(on ? "ok" : "", on ? "connected" : "not connected");
+  }, () => showProjectState("", "unknown"));
   $("#settings-dialog").showModal();
 }
 
@@ -1011,21 +1052,39 @@ async function saveSettings(e) {
   e.preventDefault();
   const p = projects.get(settingsFor);
   const err = $("#settings-error");
+  const button = $("#settings-form button[type=submit]");
   err.hidden = true;
+  button.disabled = true;
   try {
     const framerUrl = normalizeFramerUrl($("#set-framer-url").value);
     const domain = normalizeDomain($("#set-domain").value);
+    const project = $("#set-project").value.trim();
+    const apiKey = $("#set-api-key").value.trim();
+    if (project && !/^https:\/\/[^/]+\/projects\/[^/?#]+/.test(project)) throw new Error("The project link should look like https://framer.com/projects/…");
+    if ((project || apiKey) && !(project || settingsSecrets.has(SECRET.project))) throw new Error("Add the project link too.");
+    if ((project || apiKey) && !(apiKey || settingsSecrets.has(SECRET.key))) throw new Error("Add the API key too.");
     const config = { ...p.config, framerUrl, domain: domain || undefined };
     if (domain !== (p.config.domain || "")) await enablePages(p.full, domain);
-    await commitFiles(p.full, { [config.legacy ? LEGACY.config : CONFIG_PATH]: configFile(config) }, "Update site settings");
+    // Secrets first, so the sync this commit starts already has them.
+    if (project) await putSecret(p.full, SECRET.project, project);
+    if (apiKey) await putSecret(p.full, SECRET.key, apiKey);
+    if (project || apiKey || config.legacy) {
+      // Also brings the repo's sync files up to date.
+      await commitFiles(p.full, installFiles(await loadTemplates(), config, config.legacy), "Update site settings");
+      config.legacy = false;
+    } else {
+      await commitFiles(p.full, { [CONFIG_PATH]: configFile(config) }, "Update site settings");
+    }
     p.config = config;
     saveCache();
     $("#settings-dialog").close();
-    toast("Saved. Re-exporting now.");
+    toast(project || apiKey ? "Saved. Syncing the site and project now." : "Saved. Re-exporting now.");
     refreshProject(p.full);
   } catch (ex) {
     err.textContent = friendly(ex);
     err.hidden = false;
+  } finally {
+    button.disabled = false;
   }
 }
 

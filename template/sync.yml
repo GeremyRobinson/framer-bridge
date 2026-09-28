@@ -71,6 +71,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      # Set when Bridge has stored the design project's link and API key.
+      HAS_PROJECT: ${{ secrets.SITE_PROJECT != '' && secrets.SITE_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -97,9 +100,18 @@ jobs:
             if (pageFailures.length) throw new Error("pages failed: " + pageFailures.join(", "));
             console.log(`OK: ${r.pages.length} pages, ${r.files} files`);
           '
-      - name: Commit the exported files to site/
-        # Keeps the full site (HTML, CSS, JS, images, CMS data) in this repo,
-        # one commit per publish. Turn off with "commitSite": false in
+      - name: Save the design project
+        # Pages, layers, CMS, code files, styles and images, as plain files.
+        # A problem here never blocks the site: the last saved copy stays.
+        if: env.HAS_PROJECT == 'true'
+        continue-on-error: true
+        env:
+          SITE_PROJECT: ${{ secrets.SITE_PROJECT }}
+          SITE_API_KEY: ${{ secrets.SITE_API_KEY }}
+        run: node tools/project.mjs --out _project
+      - name: Commit the exported files to site/ and project/
+        # Keeps the full site (HTML, CSS, JS, images, CMS data) and, when
+        # connected, the design project in this repo, one commit per publish. Turn off with "commitSite": false in
         # .site.json. Pushes made with the workflow token don't start
         # another run, so this can't loop.
         run: |
@@ -110,7 +122,10 @@ jobs:
           big=$(cd _site && find . -type f -size +95M)
           if [ -n "$big" ]; then echo "::warning::Too large to commit, kept on Pages only: $big"; fi
           git add -A site
-          if git diff --cached --quiet; then echo "site/ is unchanged"; exit 0; fi
+          if [ -f _project/project.json ]; then
+            rm -rf project && mv _project project && git add -A project
+          fi
+          if git diff --cached --quiet; then echo "Nothing changed"; exit 0; fi
           published=$(jq -r '.publish.published // empty' site/export-report.json)
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -q -m "Update site${published:+ (published $published)}"

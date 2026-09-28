@@ -356,3 +356,5 @@ fieldset.seg input:checked + span { color: var(--text); box-shadow: inset 0 0 0 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
+
+.set-section { display: flex; justify-content: space-between; align-items: center; margin-top: 18px; }
