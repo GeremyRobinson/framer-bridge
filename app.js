@@ -248,11 +248,11 @@ const dayFmt = (iso) => {
 };
 const host = (url) => url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
-/** GitHub runs the 15-minute schedule on the quarter hour, often a few minutes late. */
+/** The schedule runs at :04, :19, :34 and :49; GitHub is often late and sometimes skips one. */
 function nextCheck() {
   const d = new Date();
   d.setSeconds(0, 0);
-  d.setMinutes(Math.floor(d.getMinutes() / 15) * 15 + 15);
+  d.setMinutes(Math.floor((d.getMinutes() + 11) / 15) * 15 + 4);
   return d;
 }
 
@@ -761,25 +761,40 @@ function schedulePoll() {
 
 // ------------------------------------------------------------------ actions
 
-async function syncNow(full, button) {
+// Starts the sync workflow. force: false only re-exports if Framer changed
+// (a "check"); repos installed before the input existed reject it with a 422,
+// so those fall back to a full sync.
+async function dispatch(full, force) {
+  const url = `/repos/${full}/actions/workflows/${WORKFLOW_FILE}/dispatches`;
+  if (force) return gh(url, { method: "POST", body: { ref: "main" } });
+  try {
+    await gh(url, { method: "POST", body: { ref: "main", inputs: { force: "false" } } });
+  } catch (err) {
+    if (err.status !== 422) throw err;
+    await gh(url, { method: "POST", body: { ref: "main" } });
+  }
+}
+
+async function syncNow(fulls, button, force = true) {
   const label = $("span", button);
+  const idle = label.textContent;
   button.disabled = true;
   label.textContent = "Starting…";
   try {
-    const before = projects.get(full)?.runs?.[0]?.id;
-    await gh(`/repos/${full}/actions/workflows/${WORKFLOW_FILE}/dispatches`, { method: "POST", body: { ref: "main" } });
-    toast("Sync started");
+    const before = new Map(fulls.map((f) => [f, projects.get(f)?.runs?.[0]?.id]));
+    await Promise.all(fulls.map((f) => dispatch(f, force)));
+    toast(force ? "Sync started" : fulls.length > 1 ? `Checking ${fulls.length} Framer sites` : "Checking Framer");
     // The run takes a moment to appear.
     for (let i = 0; i < 8; i++) {
       await sleep(2000);
-      await refreshProject(full);
-      if (projects.get(full)?.runs?.[0]?.id !== before) break;
+      await Promise.all(fulls.map(refreshProject));
+      if (fulls.every((f) => projects.get(f)?.runs?.[0]?.id !== before.get(f))) break;
     }
   } catch (err) {
-    toast(`Couldn't start a sync: ${friendly(err)}`);
+    toast(`Couldn't start a ${force ? "sync" : "check"}: ${friendly(err)}`);
   } finally {
     button.disabled = false;
-    label.textContent = "Sync now";
+    label.textContent = idle;
   }
 }
 
@@ -829,9 +844,12 @@ A GitHub Pages copy of the Framer site [${host(config.framerUrl)}](${config.fram
 kept in sync by Bridge.
 
 Every 15 minutes \`.github/workflows/${WORKFLOW_FILE}\` checks whether the Framer
-site was republished. If it was, it runs \`tools/framer-export.mjs\` and deploys
-the result. To update right away, open the **Actions** tab, pick
-**Framer Bridge sync** and click **Run workflow**.
+site was republished. If it was, it runs \`tools/framer-export.mjs\`, commits the
+full exported site to \`site/\` and deploys it. To update right away, press
+**Check now** in Bridge, or open the **Actions** tab, pick **Framer Bridge sync**
+and click **Run workflow**.
+
+\`site/\` is overwritten on every sync, so edit the design in Framer, not here.
 
 Things that only work on Framer's hosting (forms, CMS search, analytics, checkout)
 won't work in this copy.
@@ -1464,9 +1482,13 @@ document.addEventListener("click", (e) => {
   const action = btn.dataset.action;
   if (action === "connect") return openConnect();
   if (action === "map") return select(null);
+  if (action === "check") {
+    const fulls = selected ? [selected] : [...projects.keys()];
+    return fulls.length ? syncNow(fulls, btn, false) : toast("Nothing connected yet");
+  }
 
   if (!selected) return;
-  if (action === "sync") syncNow(selected, btn);
+  if (action === "sync") syncNow([selected], btn);
   if (action === "pause") togglePause(selected, btn);
   if (action === "settings") openSettings(selected);
   if (action === "copy") copyUrl(selected);

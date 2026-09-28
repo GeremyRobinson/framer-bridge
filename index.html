@@ -84,7 +84,8 @@
         <aside class="card list" id="rail">
           <a id="a-view" target="_blank" rel="noopener">View site</a>
           <button data-action="copy"><span>Copy URL</span></button>
-          <button data-action="sync"><span>Sync now</span></button>
+          <button data-action="check" title="Sync only if Framer has a new publish"><span>Check now</span></button>
+          <button data-action="sync" title="Re-export even if nothing changed"><span>Sync now</span></button>
           <a id="a-repo" target="_blank" rel="noopener">Repository</a>
           <a id="a-run" target="_blank" rel="noopener">Run log</a>
           <button data-action="settings"><span>Settings</span></button>
@@ -96,7 +97,7 @@
           <div id="stage-map" class="panel map-panel" hidden>
             <div class="canvas-head">
               <span class="map-title">Connections <i class="dot" id="map-summary-dot"></i><span id="map-summary" class="mono muted"></span></span>
-              <span class="muted map-hint">Drag from a Framer site's dot to a repository to connect them</span>
+              <span class="map-actions"><span class="muted map-hint">Drag from a Framer site's dot to a repository to connect them</span><button type="button" class="link" data-action="check" title="Look for a new Framer publish on every connection"><span>Check now</span></button></span>
             </div>
             <div class="map" id="map">
               <svg class="wires" id="map-wires"></svg>

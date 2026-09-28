@@ -248,6 +248,8 @@ input.pill::placeholder { color: var(--faint); }
 .app.is-map { grid-template-columns: minmax(0, 1fr) 270px; }
 .map-panel { padding: 16px; }
 .map-hint { text-align: right; }
+.map-actions { display: flex; align-items: center; gap: 16px; }
+.map-actions .link { white-space: nowrap; }
 .map-title { display: inline-flex; align-items: center; gap: 8px; }
 .steps { display: inline-flex; gap: 3px; }
 .steps .dot { width: 6px; height: 6px; }

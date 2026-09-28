@@ -6,12 +6,20 @@ name: Framer Bridge sync
 # Every 15 minutes it checks whether the Framer site was republished, and if
 # so re-exports it with tools/framer-export.mjs and deploys the result. It
 # also runs on every push to main and from the Actions tab ("Run workflow").
+# GitHub's timer is best effort and can skip runs, so Bridge's "Check now"
+# starts the same check on demand (force: false).
 on:
   push:
     branches: [main]
   schedule:
-    - cron: "*/15 * * * *"
+    # Off the top of the hour, when GitHub drops the most scheduled runs.
+    - cron: "4-59/15 * * * *"
   workflow_dispatch:
+    inputs:
+      force:
+        description: Re-export even if Framer hasn't changed
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -27,7 +35,7 @@ jobs:
     name: Check Framer
     runs-on: ubuntu-latest
     outputs:
-      changed: ${{ github.event_name != 'schedule' || steps.seen.outputs.cache-hit != 'true' }}
+      changed: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force) || steps.seen.outputs.cache-hit != 'true' }}
       fingerprint: ${{ steps.fp.outputs.fingerprint }}
       framer_url: ${{ steps.fp.outputs.framer_url }}
     steps:
@@ -61,6 +69,8 @@ jobs:
     needs: check
     if: needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -87,6 +97,24 @@ jobs:
             if (pageFailures.length) throw new Error("pages failed: " + pageFailures.join(", "));
             console.log(`OK: ${r.pages.length} pages, ${r.files} files`);
           '
+      - name: Commit the exported files to site/
+        # Keeps the full site (HTML, CSS, JS, images, CMS data) in this repo,
+        # one commit per Framer publish. Turn off with "commitSite": false in
+        # .framer-bridge.json. Pushes made with the workflow token don't start
+        # another run, so this can't loop.
+        run: |
+          if [ "$(jq -r '.commitSite // true' .framer-bridge.json)" != "true" ]; then exit 0; fi
+          rm -rf site && mkdir site
+          # GitHub refuses files over 100 MB; those stay on Pages only.
+          rsync -a --max-size=95m _site/ site/
+          big=$(cd _site && find . -type f -size +95M)
+          if [ -n "$big" ]; then echo "::warning::Too large to commit, kept on Pages only: $big"; fi
+          git add -A site
+          if git diff --cached --quiet; then echo "site/ is unchanged"; exit 0; fi
+          git -c user.name="Framer Bridge" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Sync from Framer ($(jq -r '.framer.build // "export"' site/export-report.json))"
+          for i in 1 2 3; do git pull -q --rebase origin main && git push -q origin HEAD:main && exit 0; sleep 3; done
+          echo "::warning::Couldn't push site/ to main; the site is still deployed"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
