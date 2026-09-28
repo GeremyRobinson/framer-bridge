@@ -7,12 +7,20 @@
   <meta name="description" content="Publish in Framer, host on GitHub. Bridge keeps a GitHub Pages copy of your Framer site in sync.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23f2f2f2'/%3E%3Cpath d='M8 20c4 0 4-8 8-8s4 8 8 8' stroke='%23111' stroke-width='1.6' fill='none'/%3E%3Ccircle cx='8' cy='20' r='2.4' fill='%2322c55e'/%3E%3Ccircle cx='24' cy='20' r='2.4' fill='%23111'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
+  <script>try { const t = localStorage.getItem("framer-bridge:theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}</script>
 </head>
 <body>
   <div class="shell">
     <header class="bar">
       <a class="wordmark" href="./">Bridge</a>
-      <span class="bar-right" id="top-clock"><i class="dot" id="clock-dot"></i><span id="clock-text" class="mono">Framer → GitHub Pages</span></span>
+      <span class="bar-end">
+        <span class="bar-right" id="top-clock"><i class="dot" id="clock-dot"></i><span id="clock-text" class="mono">Framer → GitHub Pages</span></span>
+        <span class="theme mono" role="group" aria-label="Appearance">
+          <button type="button" data-theme-set="light">light</button>
+          <button type="button" data-theme-set="dark">dark</button>
+          <button type="button" data-theme-set="system">system</button>
+        </span>
+      </span>
     </header>
 
     <!-- Sign in: two connection points -->

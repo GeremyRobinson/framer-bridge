@@ -1281,6 +1281,23 @@ document.addEventListener("submit", (e) => {
   }
 });
 
+// ------------------------------------------------------------------ appearance
+
+const THEME_KEY = "framer-bridge:theme";
+function applyTheme(t) {
+  if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  for (const b of $$("[data-theme-set]")) b.setAttribute("aria-pressed", String(b.dataset.themeSet === (t || "system")));
+}
+applyTheme(store.get(THEME_KEY));
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-theme-set]");
+  if (!b) return;
+  const t = b.dataset.themeSet;
+  if (t === "system") store.del(THEME_KEY); else store.set(THEME_KEY, t);
+  applyTheme(t);
+});
+
 // ------------------------------------------------------------------ wiring
 
 async function signIn(t, user) {

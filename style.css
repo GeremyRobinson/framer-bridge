@@ -33,9 +33,41 @@
   --ok: #1fbf5f;
   --busy: #f5a524;
   --err: #ef4444;
+  --backdrop: rgba(255, 255, 255, .75);
+  --drkm: 0;                /* ABC Areal's dark-mode axis evens out weight on dark backgrounds */
   --radius: 22px;
+  color-scheme: light;
   --sans: "Areal", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --mono: "Areal Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --text: #ececec;
+    --muted: #858585;
+    --faint: #4b4b4b;
+    --rule: #2a2a2a;
+    --page: #0b0b0b;
+    --panel: #161616;
+    --card: #1f1f1f;
+    --well: #161616;
+    --backdrop: rgba(0, 0, 0, .6);
+    --drkm: 1;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --text: #ececec;
+  --muted: #858585;
+  --faint: #4b4b4b;
+  --rule: #2a2a2a;
+  --page: #0b0b0b;
+  --panel: #161616;
+  --card: #1f1f1f;
+  --well: #161616;
+  --backdrop: rgba(0, 0, 0, .6);
+  --drkm: 1;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -43,12 +75,14 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; background: var(--page); color: var(--text);
   font: 400 var(--size)/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+  font-variation-settings: "DRKM" var(--drkm);
+  transition: background-color .25s, color .25s;
 }
 h1, h2, h3, p, dl, dd, ol { margin: 0; font-size: inherit; font-weight: inherit; }
 a { color: inherit; }
 button, input, select { font: inherit; color: inherit; letter-spacing: inherit; }
 [hidden] { display: none !important; }
-.mono, .row > b, .activity .a-meta, .info dd { font-family: var(--mono); font-variation-settings: "MONO" 100; letter-spacing: 0; }
+.mono, .row > b, .activity .a-meta, .info dd { font-family: var(--mono); font-variation-settings: "MONO" 100, "DRKM" var(--drkm); letter-spacing: 0; }
 .muted { color: var(--muted); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; padding-bottom: 7px; border-bottom: var(--line) solid var(--rule); margin: 0 0 12px; }
@@ -94,6 +128,10 @@ input.pill::placeholder { color: var(--faint); }
 .bar { display: flex; justify-content: space-between; align-items: center; gap: 16px; background: var(--panel); border-radius: 999px; padding: 7px 18px; min-height: 34px; }
 .wordmark { text-decoration: none; text-transform: uppercase; letter-spacing: 0.22em; font-weight: 550; }
 .bar-right { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.bar-end { display: inline-flex; align-items: center; gap: 18px; min-width: 0; }
+.theme { display: inline-flex; gap: 2px; background: var(--card); border-radius: 999px; padding: 2px; flex: none; }
+.theme button { border: 0; background: none; color: var(--muted); padding: 1px 10px; border-radius: 999px; cursor: pointer; }
+.theme button[aria-pressed="true"] { color: var(--text); box-shadow: inset 0 0 0 var(--line) var(--text); }
 #clock-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .pickers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 10px 0; }
@@ -249,7 +287,7 @@ input.pill::placeholder { color: var(--faint); }
 /* ---------------------------------------------------------------- dialogs, forms */
 dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; border: 0; border-radius: var(--radius); padding: 0; background: var(--panel); color: var(--text); }
 dialog[open] { animation: rise .25s both; }
-dialog::backdrop { background: rgba(255, 255, 255, .75); }
+dialog::backdrop { background: var(--backdrop); }
 .dialog-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; border-bottom: var(--line) solid var(--rule); padding-bottom: 7px; margin-bottom: 4px; }
 .dialog-head .label { border: 0; margin: 0; padding: 0; }
 .dialog-foot { display: flex; justify-content: flex-end; align-items: center; gap: 18px; margin-top: 20px; }
@@ -275,6 +313,8 @@ fieldset.seg input:checked + span { color: var(--text); box-shadow: inset 0 0 0 
 }
 @media (max-width: 760px) {
   .shell { padding: 12px; }
+  .bar { flex-wrap: wrap; border-radius: 18px; }
+  .bar-end { width: 100%; justify-content: space-between; gap: 10px; }
   .connect { padding: 20px 12px; }
   .pair { grid-template-columns: 1fr; }
   .pair-wire { justify-self: center; width: 0; height: 36px; border-top: 0; border-left: var(--line) dashed var(--faint); margin: 0; }
