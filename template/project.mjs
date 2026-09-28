@@ -84,6 +84,7 @@ function plain(v, depth = 0, stack = new Set()) {
 
 let nodeCount = 0;
 const methodErrors = new Map(); // first failure per method, for the report
+const methodStats = {};
 /** A node with its whole subtree, plus text, rich text and SVG where the node has them. */
 async function tree(node) {
   const out = plain(node);
@@ -92,8 +93,17 @@ async function tree(node) {
     if (typeof node[method] !== "function") continue;
     try {
       out[key] = await node[method]();
+      methodStats[method] = (methodStats[method] || 0) + 1;
     } catch (err) {
-      if (!methodErrors.has(method)) methodErrors.set(method, `${out.type}.${method}: ${err?.message || err}`);
+      // Retry on a freshly fetched copy of the node, then give up quietly.
+      try {
+        const fresh = await api.getNode(node.id);
+        out[key] = await fresh[method]();
+        methodStats[method + " (retry)"] = (methodStats[method + " (retry)"] || 0) + 1;
+      } catch {
+        methodStats[method + " failed"] = (methodStats[method + " failed"] || 0) + 1;
+        if (!methodErrors.has(method)) methodErrors.set(method, `${out.type}.${method} on ${node.id} (replica: ${node.isReplica}): ${err?.message || err}`);
+      }
     }
   }
   let children = [];
@@ -209,5 +219,5 @@ for (let [name, data] of files) {
   await writeFile(dest, data);
 }
 failures.push(...methodErrors.values());
-await writeFile(path.join(OUT, "report.json"), unbrand(JSON.stringify({ files: files.size, nodes: nodeCount, failures }, null, 2)));
+await writeFile(path.join(OUT, "report.json"), unbrand(JSON.stringify({ files: files.size, nodes: nodeCount, reads: methodStats, failures }, null, 2)));
 console.error(`Saved ${files.size} files to ${OUT}${failures.length ? ` (${failures.length} problems, see report.json)` : ""}`);
