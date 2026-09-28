@@ -11,6 +11,7 @@ const WORKFLOW_PATH = `.github/workflows/${WORKFLOW_FILE}`;
 const CONFIG_PATH = ".site.json";
 const EXPORTER_PATH = "tools/export.mjs";
 const PROJECT_TOOL_PATH = "tools/project.mjs";
+const REACT_TOOL_PATH = "tools/react.mjs";
 const LEGACY = { workflow: "framer-bridge.yml", config: ".framer-bridge.json", exporter: "tools/framer-export.mjs" };
 const TOKEN_KEY = "framer-bridge:token";
 const CACHE_KEY = "framer-bridge:projects";
@@ -876,15 +877,15 @@ this copy.
 }
 
 async function loadTemplates() {
-  const [exporter, workflow, project] = await Promise.all(
-    ["template/export.mjs", "template/sync.yml", "template/project.mjs"].map((f) =>
+  const [exporter, workflow, project, react] = await Promise.all(
+    ["template/export.mjs", "template/sync.yml", "template/project.mjs", "template/react.mjs"].map((f) =>
       fetch(f, { cache: "no-cache" }).then((r) => {
         if (!r.ok) throw new Error(`Couldn't load ${f}`);
         return r.text();
       })
     )
   );
-  return { exporter, workflow, project };
+  return { exporter, workflow, project, react };
 }
 
 function progressStep(text) {
@@ -1016,6 +1017,7 @@ function installFiles(t, config, legacy) {
     [WORKFLOW_PATH]: t.workflow,
     [EXPORTER_PATH]: t.exporter,
     [PROJECT_TOOL_PATH]: t.project,
+    [REACT_TOOL_PATH]: t.react,
     [CONFIG_PATH]: configFile({ ...config, legacy: false }),
   };
   if (legacy) Object.assign(files, { [`.github/workflows/${LEGACY.workflow}`]: null, [LEGACY.exporter]: null, [LEGACY.config]: null });

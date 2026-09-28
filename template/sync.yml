@@ -88,6 +88,7 @@ jobs:
           base="/$repo/"
           if [ -n "$domain" ]; then base="/"; fi
           case "$repo" in *.github.io) base="/" ;; esac
+          echo "SITE_BASE=$base" >> "$GITHUB_ENV"
           node tools/export.mjs "${{ needs.check.outputs.site_url }}" --base-path "$base" --out _site
       - name: Check the export before publishing
         run: |
@@ -109,7 +110,19 @@ jobs:
           SITE_PROJECT: ${{ secrets.SITE_PROJECT }}
           SITE_API_KEY: ${{ secrets.SITE_API_KEY }}
         run: node tools/project.mjs --out _project
-      - name: Commit the exported files to site/ and project/
+      - name: Rebuild the site as a React app
+        # Writes app/, a React + Vite project of every page with no builder
+        # code in it, and serves its build at <site>/react/ as a preview.
+        # A problem here never blocks the site.
+        if: hashFiles('tools/react.mjs') != ''
+        continue-on-error: true
+        run: |
+          node tools/react.mjs --site _site --out _app --base "${SITE_BASE}react/"
+          cd _app
+          npm install --no-audit --no-fund --loglevel=error
+          npm run build
+          cp -r dist ../_site/react
+      - name: Commit the exported files to site/, project/ and app/
         # Keeps the full site (HTML, CSS, JS, images, CMS data) and, when
         # connected, the design project in this repo, one commit per publish. Turn off with "commitSite": false in
         # .site.json. Pushes made with the workflow token don't start
@@ -118,12 +131,15 @@ jobs:
           if [ "$(jq -r '.commitSite // true' .site.json)" != "true" ]; then exit 0; fi
           rm -rf site && mkdir site
           # GitHub refuses files over 100 MB; those stay on Pages only.
-          rsync -a --max-size=95m _site/ site/
+          rsync -a --max-size=95m --exclude=/react/ _site/ site/
           big=$(cd _site && find . -type f -size +95M)
           if [ -n "$big" ]; then echo "::warning::Too large to commit, kept on Pages only: $big"; fi
           git add -A site
           if [ -f _project/project.json ]; then
             rm -rf project && mv _project project && git add -A project
+          fi
+          if [ -f _app/src/App.jsx ]; then
+            rm -rf _app/node_modules _app/dist app && mv _app app && git add -A app
           fi
           if git diff --cached --quiet; then echo "Nothing changed"; exit 0; fi
           published=$(jq -r '.publish.published // empty' site/export-report.json)

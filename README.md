@@ -11,12 +11,16 @@ site to a GitHub repository and keeps a GitHub Pages copy of it in sync.
    stays in your browser; the app has no server and talks to GitHub directly.
 2. Connect a project: paste the published Framer address, choose a new or
    existing repository, and optionally a custom domain. The app turns on
-   GitHub Pages and commits three things to the repo:
+   GitHub Pages and commits these to the repo:
    - `.github/workflows/sync.yml`, the sync workflow
    - `tools/export.mjs`, the exporter
+   - `tools/project.mjs`, which saves the design project when a key is set
+   - `tools/react.mjs`, which rebuilds the site as a React app
    - `.site.json`, the project's settings
 
-   Each sync also commits the full exported site to `site/`. Nothing Bridge
+   Each sync also commits the full exported site to `site/` and a React +
+   Vite version of it to `app/` (served as a preview at `<site>/react/`),
+   which runs none of the builder's code. Nothing Bridge
    writes to the repo names Framer: file names, commit messages, the README
    and the exported site itself only carry the site's own name (the exporter
    replaces the builder's name in the output; `--keep-names` turns that off).
