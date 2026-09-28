@@ -83,13 +83,18 @@ function plain(v, depth = 0, stack = new Set()) {
 }
 
 let nodeCount = 0;
+const methodErrors = new Map(); // first failure per method, for the report
 /** A node with its whole subtree, plus text, rich text and SVG where the node has them. */
 async function tree(node) {
   const out = plain(node);
   if (++nodeCount > MAX_NODES) return out;
   for (const [key, method] of [["text", "getText"], ["html", "getHTML"], ["svg", "getSVG"]]) {
     if (typeof node[method] !== "function") continue;
-    try { out[key] = await node[method](); } catch {}
+    try {
+      out[key] = await node[method]();
+    } catch (err) {
+      if (!methodErrors.has(method)) methodErrors.set(method, `${out.type}.${method}: ${err?.message || err}`);
+    }
   }
   let children = [];
   try { children = await node.getChildren(); } catch {}
@@ -165,8 +170,10 @@ try {
 // Images: download every asset the data points at and use the local copy.
 const hostRe = new RegExp(`https://[a-z0-9.-]*${B}usercontent\\.com/[^"'\\s)\\\\]+`, "g");
 const urls = new Set();
-const isImage = (u) => /\/images\/|\.(png|jpe?g|webp|gif|svg|avif)(\?|$)/i.test(u);
-for (const [name, text] of files) if (!name.startsWith("code/")) for (const u of text.match(hostRe) || []) if (isImage(u)) urls.add(u);
+// Images, plus the font files the pages' text styles use. fonts.json itself
+// lists every weight of each family, so it doesn't add downloads.
+const wanted = (u, name) => /\/images\/|\.(png|jpe?g|webp|gif|svg|avif)(\?|$)/i.test(u) || (/\.(woff2?|ttf|otf)(\?|$)/i.test(u) && name !== "styles/fonts.json");
+for (const [name, text] of files) if (!name.startsWith("code/")) for (const u of text.match(hostRe) || []) if (wanted(u, name)) urls.add(u);
 const local = new Map();
 await Promise.all(Array.from({ length: 8 }, async () => {
   for (const u of [...urls]) {
@@ -201,5 +208,6 @@ for (let [name, data] of files) {
   await mkdir(path.dirname(dest), { recursive: true });
   await writeFile(dest, data);
 }
+failures.push(...methodErrors.values());
 await writeFile(path.join(OUT, "report.json"), unbrand(JSON.stringify({ files: files.size, nodes: nodeCount, failures }, null, 2)));
 console.error(`Saved ${files.size} files to ${OUT}${failures.length ? ` (${failures.length} problems, see report.json)` : ""}`);
