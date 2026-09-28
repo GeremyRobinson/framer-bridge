@@ -145,7 +145,11 @@ try {
   for (const [name, fn] of [
     ["styles/colors.json", () => api.getColorStyles()],
     ["styles/text.json", () => api.getTextStyles()],
-    ["styles/fonts.json", () => api.getFonts()],
+    // getFonts lists the whole font library; keep only the families the site uses.
+    ["styles/fonts.json", async () => {
+      const used = [...files.values()].join("\n");
+      return (await api.getFonts()).filter((f) => f.family && used.includes(`"${f.family}"`));
+    }],
     ["redirects.json", () => api.getRedirects()],
     ["locales.json", () => api.getLocales()],
   ]) {
@@ -161,7 +165,8 @@ try {
 // Images: download every asset the data points at and use the local copy.
 const hostRe = new RegExp(`https://[a-z0-9.-]*${B}usercontent\\.com/[^"'\\s)\\\\]+`, "g");
 const urls = new Set();
-for (const [name, text] of files) if (!name.startsWith("code/")) for (const u of text.match(hostRe) || []) urls.add(u);
+const isImage = (u) => /\/images\/|\.(png|jpe?g|webp|gif|svg|avif)(\?|$)/i.test(u);
+for (const [name, text] of files) if (!name.startsWith("code/")) for (const u of text.match(hostRe) || []) if (isImage(u)) urls.add(u);
 const local = new Map();
 await Promise.all(Array.from({ length: 8 }, async () => {
   for (const u of [...urls]) {

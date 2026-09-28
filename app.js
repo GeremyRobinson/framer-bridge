@@ -1072,11 +1072,14 @@ async function saveSettings(e) {
       // Also brings the repo's sync files up to date.
       await commitFiles(p.full, installFiles(await loadTemplates(), config, config.legacy), "Update site settings");
       config.legacy = false;
+
     } else {
       await commitFiles(p.full, { [CONFIG_PATH]: configFile(config) }, "Update site settings");
     }
     p.config = config;
     saveCache();
+    // A full sync, so the project is saved now rather than at the next publish.
+    if (project || apiKey) await dispatch(p.full, true).catch(() => {});
     $("#settings-dialog").close();
     toast(project || apiKey ? "Saved. Syncing the site and project now." : "Saved. Re-exporting now.");
     refreshProject(p.full);
