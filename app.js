@@ -9,8 +9,8 @@ const CONFIG_PATH = ".framer-bridge.json";
 const TOKEN_KEY = "framer-bridge:token";
 const CACHE_KEY = "framer-bridge:projects";
 const SELECTED_KEY = "framer-bridge:selected";
-const CANVAS_W = 1150;
-const CANVAS_H = 560;
+const CANVAS_W = 900;
+const CANVAS_H = 500;
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -292,8 +292,8 @@ function renderNodes(p, m) {
       ${row("Checks", p.paused ? "Paused" : "Every 15 min")}
     </div>
     <div class="box">
-      ${row('<i class="clock"></i> Last check', cur ? agoEl(cur.run.run_started_at || cur.run.created_at) : "Not yet")}
-      ${row('<i class="clock"></i> Next check', p.paused ? "Paused" : `<span data-countdown>${clockFmt((nextCheck() - Date.now()) / 1000)}</span>`)}
+      ${row('Last check', cur ? agoEl(cur.run.run_started_at || cur.run.created_at) : "Not yet")}
+      ${row('Next check', p.paused ? "Paused" : `<span data-countdown>${clockFmt((nextCheck() - Date.now()) / 1000)}</span>`)}
     </div>`;
 
   // New publish?
@@ -332,7 +332,7 @@ function renderNodes(p, m) {
         ${row("Skipped", r ? (failed ? `<span title="${esc(r.failures.slice(0, 8).join("\n"))}">${failed}</span>` : "0") : "–")}
       </div>
       <div class="box">
-        ${row('<i class="clock"></i> Exported', r ? agoEl(r.exportedAt) : m.export === "err" ? "Failed" : "–")}
+        ${row('Exported', r ? agoEl(r.exportedAt) : m.export === "err" ? "Failed" : "–")}
         ${row("Took", dur(secs(b?.started_at, b?.completed_at)))}
         ${m.export === "err" ? '<div class="box-title">The live site was kept as it was.</div>' : ""}
       </div>`;
@@ -357,7 +357,7 @@ function renderNodes(p, m) {
     <div class="box">
       ${row("Target", "GitHub Pages")}
       ${m.deploy === "busy" ? row("Elapsed", d?.started_at ? since(d.started_at) : "0:00") : row("Took", dur(secs(d?.started_at, d?.completed_at)))}
-      ${m.deploy === "busy" ? '<div class="meter indeterminate"><i></i></div>' : row('<i class="clock"></i> Shipped', p.lastDeploy ? agoEl(p.lastDeploy) : "–")}
+      ${m.deploy === "busy" ? '<div class="meter indeterminate"><i></i></div>' : row('Shipped', p.lastDeploy ? agoEl(p.lastDeploy) : "–")}
     </div>`;
 
   // Live site
@@ -371,7 +371,7 @@ function renderNodes(p, m) {
       ${row("Mode", r ? (r.mode === "static" ? "Plain HTML" : "Interactive") : "–")}
     </div>
     <div class="box">
-      ${row('<i class="clock"></i> Version from', p.lastDeploy ? dayFmt(p.lastDeploy) : "–")}
+      ${row('Version from', p.lastDeploy ? dayFmt(p.lastDeploy) : "–")}
     </div>`;
 
   countUp();
@@ -432,12 +432,12 @@ function renderWires(p, m) {
   const svg = $("#wires");
   const n = (name) => $(`[data-node="${name}"]`);
   if (!n("source").offsetWidth) return; // stacked phone layout: CSS draws the links
-  const wireState = (s) => (s === "busy" ? "busy" : s === "err" ? "err" : s === "ok" ? "ok" : "");
+  const wireState = (s) => (s === "busy" ? "busy" : s === "err" ? "err" : s === "ok" ? "ok" : "idle");
   const wires = [
-    { id: "w-src", d: hCurve(portOf(n("source"), "right"), portOf(n("check"), "left")), cls: m.source === "busy" ? "busy" : m.source === "err" ? "err" : m.cur ? "ok" : "", ambient: !p.paused && !m.running },
+    { id: "w-src", d: vCurve(portOf(n("source"), "bottom"), portOf(n("check"), "top")), cls: m.source === "busy" ? "busy" : m.source === "err" ? "err" : m.cur ? "ok" : "idle", ambient: !p.paused && !m.running },
     { id: "w-yes", d: hCurve(rowPort(n("check"), "yes"), portOf(n("export"), "left")), cls: m.branch === "yes" ? (m.export === "busy" ? "busy" : m.export === "err" ? "err" : "yes") : "yes faded", port: "yes" },
     { id: "w-no", d: hCurve(rowPort(n("check"), "no"), portOf(n("skip"), "left")), cls: m.branch === "no" ? "no" : "no faded", port: "no" },
-    { id: "w-dep", d: hCurve(headPort(n("export"), "right"), headPort(n("deploy"), "left")), cls: m.branch === "yes" ? wireState(m.deploy) : m.lastShip ? "ok faded" : "" },
+    { id: "w-dep", d: hCurve(headPort(n("export"), "right"), headPort(n("deploy"), "left")), cls: m.branch === "yes" ? wireState(m.deploy) : m.lastShip ? "ok" : "idle" },
     { id: "w-live", d: vCurve(portOf(n("deploy"), "bottom"), portOf(n("live"), "top")), cls: m.deploy === "busy" ? "busy" : wireState(m.live) },
   ];
   const draw = drawnFor !== p.full;
@@ -463,7 +463,7 @@ function renderWires(p, m) {
       c.setAttribute("cx", x);
       c.setAttribute("cy", y);
       c.setAttribute("r", 4.5);
-      const st = /busy/.test(w.cls) ? "" : /err/.test(w.cls) ? "err" : /faded/.test(w.cls) || !w.cls ? "idle" : w.port || "";
+      const st = /faded|idle/.test(w.cls) ? "idle" : "";
       c.setAttribute("class", `port ${st}`.trim());
       svg.append(c);
     }
@@ -473,8 +473,7 @@ function renderWires(p, m) {
       for (let i = 0; i < packets; i++) {
         const dot = document.createElementNS(SVGNS, "circle");
         dot.setAttribute("r", w.ambient ? 3 : 4);
-        dot.setAttribute("class", "pulse-dot");
-        if (w.ambient) dot.style.opacity = ".45";
+        dot.setAttribute("class", w.ambient ? "pulse-dot watch" : "pulse-dot");
         const am = document.createElementNS(SVGNS, "animateMotion");
         const secsLen = w.ambient ? 3.2 : 1.4;
         am.setAttribute("dur", `${secsLen}s`);
@@ -512,17 +511,7 @@ function flash(name) {
 }
 
 function fitCanvas() {
-  const wrap = $("#canvas-wrap");
-  const canvas = $("#canvas");
-  if (!wrap || $("#stage-project").hidden) return;
-  if (matchMedia("(max-width: 760px)").matches) {
-    wrap.style.height = "";
-    canvas.style.transform = "";
-    return;
-  }
-  const scale = Math.min(1, wrap.clientWidth / CANVAS_W);
-  canvas.style.transform = `scale(${scale})`;
-  wrap.style.height = `${CANVAS_H * scale}px`;
+  // The canvas is never scaled, so text stays one size; narrow screens scroll it.
 }
 
 // ------------------------------------------------------------------ activity
@@ -580,14 +569,30 @@ function renderActivity(p, m) {
 
 function renderList() {
   const list = [...projects.values()].sort((a, b) => a.full.localeCompare(b.full));
-  const ul = $("#project-list");
-  ul.innerHTML = list.map((p) => {
-    const state = p.loaded ? model(p).badge[0] : "";
-    return `<li><button data-select="${esc(p.full)}" aria-current="${p.full === selected}">
-      <i class="dot ${state}"></i>
-      <span class="pl-name">${esc(p.full.split("/")[1])}<span class="pl-sub">${esc(host(p.config.framerUrl))}</span></span>
-    </button></li>`;
-  }).join("");
+  const sel = $("#project-select");
+  const html = list.length
+    ? list.map((p) => `<option value="${esc(p.full)}"${p.full === selected ? " selected" : ""}>${esc(p.full.split("/")[1])}  ·  ${esc(host(p.config.framerUrl))}</option>`).join("")
+    : `<option value="">No projects yet</option>`;
+  if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
+}
+
+function renderInfo(p, m) {
+  const r = p.report;
+  const url = liveUrl(p);
+  const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(text)}</a>`;
+  const rows = [
+    ["Source", link(p.config.framerUrl, host(p.config.framerUrl))],
+    ["Repository", link(`https://github.com/${p.full}`, p.full)],
+    ["Address", link(url, host(url))],
+    ["Pages", r ? r.pages.length : "–"],
+    ["Files", r ? r.files : "–"],
+    ["Mode", r ? r.mode : "–"],
+    ["Published", p.lastDeploy ? esc(dayFmt(p.lastDeploy)) : "–"],
+    ["Schedule", p.paused ? "paused" : "*/15 * * * *"],
+  ];
+  const html = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  const dl = $("#info");
+  if (dl.dataset.html !== html) { dl.innerHTML = html; dl.dataset.html = html; }
 }
 
 function render() {
@@ -598,6 +603,7 @@ function render() {
   $("#stage-empty").hidden = !!p || !scanned;
   $("#stage-project").hidden = !p;
   $("#rail").hidden = !p;
+  $("#side").hidden = !p;
   updateClock();
   if (!p) return;
 
@@ -607,7 +613,6 @@ function render() {
   $("#a-repo").href = `https://github.com/${p.full}`;
   $("#a-run").href = p.runs?.[0]?.html_url || `https://github.com/${p.full}/actions`;
   $("#pause-label").textContent = p.paused ? "Resume auto-sync" : "Pause auto-sync";
-  $("#pause-ico").innerHTML = p.paused ? '<path d="M7 4v16l13-8Z"/>' : '<path d="M9 5v14M15 5v14"/>';
 
   const badge = $("#p-badge");
   if (!p.loaded) {
@@ -623,6 +628,7 @@ function render() {
   renderNodes(p, m);
   renderWires(p, m);
   renderActivity(p, m);
+  renderInfo(p, m);
   celebrate(p, m);
 }
 
@@ -639,16 +645,14 @@ function celebrate(p, m) {
 }
 
 function updateClock() {
-  const el = $("#top-clock");
-  el.hidden = !me;
   if (!me) return;
   const all = [...projects.values()].filter((p) => p.loaded);
   const busy = all.filter((p) => p.runs?.[0] && p.runs[0].status !== "completed");
   const text = busy.length
-    ? `Syncing ${busy.map((p) => p.full.split("/")[1]).join(", ")}`
-    : `Watching ${projects.size} ${projects.size === 1 ? "site" : "sites"} · next check ${clockFmt((nextCheck() - Date.now()) / 1000)}`;
+    ? `syncing ${busy.map((p) => p.full.split("/")[1]).join(", ")}`
+    : `watching ${projects.size} · next check ${clockFmt((nextCheck() - Date.now()) / 1000)}`;
   $("#clock-text").textContent = text;
-  el.classList.toggle("busy", busy.length > 0);
+  $("#clock-dot").className = "dot " + (busy.length ? "busy" : "ok");
 }
 
 /** Once a second: countdowns, elapsed timers and "ago" labels stay current. */
@@ -1043,7 +1047,16 @@ for (const input of $$('input[name="repo-mode"]')) {
     $("#repo-existing").hidden = isNew;
   });
 }
+$("#project-select").addEventListener("change", (e) => {
+  if (!e.target.value) return;
+  selected = e.target.value;
+  store.set(SELECTED_KEY, selected);
+  drawnFor = null;
+  render();
+});
 document.addEventListener("click", (e) => {
+  if (!e.target.closest("#account")) $("#account").open = false;
+  if (e.target.closest("#account .menu")) $("#account").open = false;
   const closer = e.target.closest("[data-close]");
   if (closer) closer.closest("dialog").close();
   const pick = e.target.closest("[data-select]");

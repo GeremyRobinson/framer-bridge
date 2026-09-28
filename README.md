@@ -41,3 +41,12 @@ A failed export never replaces the live site: the last good version stays up.
 - GitHub pauses scheduled workflows in a repository after 60 days without any
   commits. Pressing **Sync now** or pushing anything wakes it up.
 - Pages on a private repository needs a paid GitHub plan.
+
+## Font
+
+The interface is designed for ABC Areal (Dinamo), using its MONO axis for
+technical values. The font is licensed and its licence forbids storing it on a
+public server, so it is not in this repository. Browsers that have it installed
+use it; everyone else gets Helvetica and the system monospace. With a Dinamo web
+licence, put the file at `fonts/ABCArealSuperfamilyVariable.ttf` and remove
+`fonts/` from `.gitignore`.
