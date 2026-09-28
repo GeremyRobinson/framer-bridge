@@ -28,7 +28,13 @@ let me = null;
 const projects = new Map();
 /** run id -> jobs, for runs that have finished (they never change again) */
 const jobCache = new Map();
-let selected = store.get(SELECTED_KEY);
+let selected = store.get(SELECTED_KEY) || null; // null: the connection map
+const SITES_KEY = "framer-bridge:sites";
+/** Repositories the user can push to (from the last scan). */
+let allRepos = [];
+/** Framer sites added on the map but not connected yet. */
+let looseSites = (() => { try { return JSON.parse(store.get(SITES_KEY) || "[]"); } catch { return []; } })();
+const saveSites = () => store.set(SITES_KEY, JSON.stringify(looseSites));
 let pollTimer = null;
 let scanned = false;
 
@@ -522,19 +528,20 @@ function activityItems(p, m) {
   for (let i = 0; i < byRun.length; i++) {
     const it = byRun[i];
     const when = it.run.run_started_at || it.run.created_at;
+    const add = (x) => items.push({ when, ...x });
     const why = { workflow_dispatch: "Manual sync", push: "Settings changed", schedule: "Scheduled check" }[it.run.event] || "Check";
     if (it.running) {
       const jobs = [it.deploy, it.build, it.check].filter((j) => j && j.status !== "completed");
       const job = jobs.find((j) => j.status === "in_progress") || jobs[0];
-      items.push({ dot: "busy", title: it.changed ? "Shipping a new publish" : "Checking Framer", meta: `${why} · ${currentStep(job)}` });
+      add({ dot: "busy", title: it.changed ? "Shipping a new publish" : "Checking Framer", meta: `${why} · ${currentStep(job)}` });
       continue;
     }
-    if (it.s.check === "err") { items.push({ dot: "err", title: "Couldn't reach Framer", meta: `${dayFmt(when)} · live site kept`, href: it.run.html_url }); continue; }
-    if (it.s.build === "err") { items.push({ dot: "err", title: "Export failed, live site kept", meta: dayFmt(when), href: it.run.html_url }); continue; }
-    if (it.s.deploy === "err") { items.push({ dot: "err", title: "Deploy failed, live site kept", meta: dayFmt(when), href: it.run.html_url }); continue; }
+    if (it.s.check === "err") { add({ dot: "err", title: "Couldn't reach Framer", meta: `${dayFmt(when)} · live site kept`, href: it.run.html_url }); continue; }
+    if (it.s.build === "err") { add({ dot: "err", title: "Export failed, live site kept", meta: dayFmt(when), href: it.run.html_url }); continue; }
+    if (it.s.deploy === "err") { add({ dot: "err", title: "Deploy failed, live site kept", meta: dayFmt(when), href: it.run.html_url }); continue; }
     if (it.s.deploy === "ok") {
       const took = secs(it.run.run_started_at || it.run.created_at, it.run.updated_at);
-      items.push({ dot: "ok", title: it.run.event === "schedule" ? "New publish shipped" : `${why}, shipped`, meta: `${dayFmt(when)} · took ${dur(took)}`, href: it.run.html_url });
+      add({ dot: "ok", title: it.run.event === "schedule" ? "New publish shipped" : `${why}, shipped`, meta: `${dayFmt(when)} · took ${dur(took)}`, href: it.run.html_url });
       continue;
     }
     if (it.changed === false) {
@@ -543,11 +550,11 @@ function activityItems(p, m) {
       while (j + 1 < byRun.length && byRun[j + 1].changed === false && !byRun[j + 1].running) j++;
       const n = j - i + 1;
       const first = byRun[j].run.run_started_at || byRun[j].run.created_at;
-      items.push({ dot: "", title: n > 1 ? `${n} checks, no changes` : "Checked, no changes", meta: n > 1 ? `${timeFmt(first)} to ${dayFmt(when)}` : dayFmt(when), href: it.run.html_url });
+      add({ dot: "", title: n > 1 ? `${n} checks, no changes` : "Checked, no changes", meta: n > 1 ? `${timeFmt(first)} to ${dayFmt(when)}` : dayFmt(when), href: it.run.html_url });
       i = j;
       continue;
     }
-    items.push({ dot: "", title: it.run.conclusion === "cancelled" ? "Run cancelled" : why, meta: dayFmt(when), href: it.run.html_url });
+    add({ dot: "", title: it.run.conclusion === "cancelled" ? "Run cancelled" : why, meta: dayFmt(when), href: it.run.html_url });
   }
   return items.slice(0, 8);
 }
@@ -570,9 +577,8 @@ function renderActivity(p, m) {
 function renderList() {
   const list = [...projects.values()].sort((a, b) => a.full.localeCompare(b.full));
   const sel = $("#project-select");
-  const html = list.length
-    ? list.map((p) => `<option value="${esc(p.full)}"${p.full === selected ? " selected" : ""}>${esc(p.full.split("/")[1])}  ·  ${esc(host(p.config.framerUrl))}</option>`).join("")
-    : `<option value="">No projects yet</option>`;
+  const html = `<option value=""${selected ? "" : " selected"}>All connections  ·  ${list.length}</option>` +
+    list.map((p) => `<option value="${esc(p.full)}"${p.full === selected ? " selected" : ""}>${esc(host(p.config.framerUrl))}  →  ${esc(p.full.split("/")[1])}</option>`).join("");
   if (sel.dataset.html !== html) { sel.innerHTML = html; sel.dataset.html = html; }
 }
 
@@ -597,15 +603,17 @@ function renderInfo(p, m) {
 
 function render() {
   if (selected && !projects.has(selected)) selected = null;
-  if (!selected && projects.size) selected = [...projects.keys()].sort()[0];
   renderList();
   const p = projects.get(selected);
-  $("#stage-empty").hidden = !!p || !scanned;
-  $("#stage-project").hidden = !p;
-  $("#rail").hidden = !p;
-  $("#side").hidden = !p;
+  const isMap = !p;
+  $(".app").classList.toggle("is-map", isMap);
+  $("#stage-empty").hidden = true;
+  $("#stage-map").hidden = !isMap;
+  $("#stage-project").hidden = isMap;
+  $("#rail").hidden = isMap;
+  $("#side").hidden = false;
   updateClock();
-  if (!p) return;
+  if (isMap) return renderMap();
 
   $("#p-owner").textContent = p.full.split("/")[0];
   $("#p-name").textContent = p.full.split("/")[1];
@@ -687,6 +695,7 @@ async function scanProjects() {
     repos.push(...batch);
     if (batch.length < 100) break;
   }
+  allRepos = repos.filter((r) => r.permissions?.push);
   const found = new Set();
   let i = 0;
   await Promise.all(Array.from({ length: 8 }, async () => {
@@ -907,6 +916,8 @@ async function connect(e) {
     step.done("The first sync has started");
 
     projects.set(full, { full, config });
+    looseSites = looseSites.filter((u) => u !== framerUrl);
+    saveSites();
     selected = full;
     store.set(SELECTED_KEY, full);
     drawnFor = null;
@@ -965,35 +976,316 @@ async function saveSettings(e) {
   }
 }
 
-async function openConnect() {
+async function openConnect(framerUrl, target) {
   const dlg = $("#connect-dialog");
   $("#connect-form").reset();
+  if (typeof framerUrl === "string") $("#framer-url").value = framerUrl;
+  const mode = target?.repo ? "existing" : "new";
   $("#connect-fields").hidden = false;
   $("#connect-progress").hidden = true;
   $("#connect-done").hidden = true;
   $("#connect-error").hidden = true;
-  $("#repo-new").hidden = false;
-  $("#repo-existing").hidden = true;
+  $(`input[name="repo-mode"][value="${mode}"]`).checked = true;
+  $("#repo-new").hidden = mode !== "new";
+  $("#repo-existing").hidden = mode !== "existing";
+  if (target?.name) $("#repo-name").value = target.name;
   $("#default-address").textContent = `${me.login.toLowerCase()}.github.io/<repo>`;
   dlg.showModal();
   const sel = $("#repo-select");
   sel.innerHTML = "<option value=''>Loading…</option>";
   try {
-    const repos = await gh("/user/repos?per_page=100&sort=pushed&affiliation=owner");
+    const repos = allRepos.length ? allRepos : (await gh("/user/repos?per_page=100&sort=pushed&affiliation=owner")).filter((r) => r.permissions?.push);
     sel.innerHTML = "";
-    for (const r of repos.filter((r) => r.permissions?.push && !projects.has(r.full_name))) {
+    for (const r of repos.filter((r) => !projects.has(r.full_name))) {
       sel.add(new Option(r.full_name + (r.private ? " (private)" : ""), r.full_name));
     }
   } catch {
-    sel.innerHTML = "<option value=''>Couldn't load repositories</option>";
+    sel.innerHTML = "";
   }
+  if (target?.repo && ![...sel.options].some((o) => o.value === target.repo)) sel.add(new Option(target.repo, target.repo));
+  if (target?.repo) sel.value = target.repo;
+  if (!sel.options.length) sel.add(new Option("Couldn't load repositories", ""));
 }
+
+// ------------------------------------------------------------------ connection map
+
+const FRAMER_ICON = '<svg viewBox="0 0 24 24"><path d="M5 3h14v6H12L5 3Z"/><path d="M5 9h7l7 6H5V9Z"/><path d="M5 15h7v6l-7-6Z"/></svg>';
+const GITHUB_ICON = '<svg viewBox="0 0 24 24"><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>';
+const siteReach = new Map(); // framer url -> "ok" | "err" | "busy"
+let mapHtml = null;
+let arming = null; // { url } while a new wire is being drawn
+
+function connState(p) {
+  if (!p.loaded) return ["busy", "loading"];
+  if (p.paused) return ["", "paused"];
+  const m = model(p);
+  return [m.badge[0], { ok: "in sync", busy: m.badge[1].toLowerCase(), err: "needs attention", idle: "setting up" }[m.badge[0]] || m.badge[1].toLowerCase()];
+}
+
+function mapRows() {
+  const conns = [...projects.values()].sort((a, b) => host(a.config.framerUrl).localeCompare(host(b.config.framerUrl)) || a.full.localeCompare(b.full));
+  const seen = new Set();
+  const rows = conns.map((p) => {
+    const f = seen.has(p.config.framerUrl) ? null : p.config.framerUrl;
+    seen.add(p.config.framerUrl);
+    return { f, g: p.full, p };
+  });
+  const sites = looseSites.filter((u) => !seen.has(u));
+  const repos = allRepos.filter((r) => !projects.has(r.full_name)).slice(0, 6).map((r) => r.full_name);
+  const n = Math.max(sites.length, repos.length);
+  for (let i = 0; i < n; i++) rows.push({ f: sites[i] || null, g: repos[i] || null });
+  rows.push({ f: "__add", g: "__new" });
+  return rows;
+}
+
+function framerNode(url) {
+  if (url === "__add") {
+    return `<form class="node mnode fr add" id="add-site">
+      <div class="node-head">${FRAMER_ICON}<h3>Add a Framer site</h3></div>
+      <div class="box">
+        <input class="pill mono" name="site" type="text" inputmode="url" placeholder="yoursite.framer.website" aria-label="Published Framer site">
+        <button class="pill pill-btn" type="submit">Add<i class="tri right"></i></button>
+      </div>
+    </form>`;
+  }
+  const linked = [...projects.values()].filter((p) => p.config.framerUrl === url);
+  let state, text;
+  if (linked.length) {
+    const states = linked.map((p) => connState(p)[0]);
+    state = states.includes("err") ? "err" : states.includes("busy") ? "busy" : states.includes("ok") ? "ok" : "";
+    text = linked.length === 1 ? "connected" : `${linked.length} repos`;
+  } else {
+    state = siteReach.get(url) || "";
+    text = state === "ok" ? "reachable" : state === "err" ? "can't reach" : "not connected";
+  }
+  const lastPublish = linked.map((p) => p.lastDeploy).filter(Boolean).sort().pop();
+  return `<div class="node mnode fr${linked.length ? " linked" : " unlinked"}" data-framer="${esc(url)}">
+    <div class="node-head">${FRAMER_ICON}<h3>${esc(host(url))}</h3><span class="node-state"><i class="dot ${state}"></i>${text}</span></div>
+    <div class="box">
+      ${row("Site", `<a class="site-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(host(url))}</a>`)}
+      ${linked.length ? row("Last shipped", lastPublish ? `<span data-ago="${esc(lastPublish)}"></span>` : "–") : row("Repository", `<button type="button" class="link" data-remove-site="${esc(url)}">none · remove</button>`)}
+    </div>
+    <button type="button" class="mport out" data-port-framer="${esc(url)}" title="Drag to a repository to connect" aria-label="Connect ${esc(host(url))} to a repository"></button>
+  </div>`;
+}
+
+function githubNode(full) {
+  if (full === "__new") {
+    return `<div class="node mnode gh new" data-repo="__new">
+      <button type="button" class="mport in" data-port-repo="__new" aria-label="Connect to a new repository"></button>
+      <div class="node-head">${GITHUB_ICON}<h3>New repository</h3></div>
+      <div class="box">${row("Created by", "Bridge")}${row("Hosting", "GitHub Pages")}</div>
+    </div>`;
+  }
+  const p = projects.get(full);
+  const r = allRepos.find((x) => x.full_name === full);
+  const [owner, name] = full.split("/");
+  const [state, text] = p ? connState(p) : ["", r?.private ? "private" : "public"];
+  const url = p ? liveUrl(p) : null;
+  return `<div class="node mnode gh${p ? " linked" : ""}" data-repo="${esc(full)}">
+    <button type="button" class="mport in" data-port-repo="${esc(full)}" aria-label="Connect to ${esc(full)}"></button>
+    <div class="node-head">${GITHUB_ICON}<h3>${esc(name)}</h3><span class="node-state">${p ? `<i class="dot ${state}"></i>` : ""}${esc(p ? (url ? "live" : text) : text)}</span></div>
+    <div class="box">
+      ${row("Repo", `<a class="site-link" href="https://github.com/${esc(full)}" target="_blank" rel="noopener">${esc(owner)}/${esc(name)}</a>`)}
+      ${row("Live", url ? `<a class="site-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(host(url))}</a>` : "–")}
+    </div>
+  </div>`;
+}
+
+function renderMap() {
+  const rows = mapRows();
+  const html = `<div class="map-col-title">Framer</div><div></div><div class="map-col-title">GitHub</div>` + rows.map(({ f, g, p }) => {
+    const [st, text] = p ? connState(p) : [];
+    return `<div class="mcell fr">${f ? framerNode(f) : ""}</div>` +
+      `<div class="mmid">${p ? `<button type="button" class="mlabel" data-open="${esc(p.full)}"><i class="dot ${st}"></i><span class="mono">${esc(text)}</span></button>` : ""}</div>` +
+      `<div class="mcell gh">${g ? githubNode(g) : ""}</div>`;
+  }).join("");
+  const grid = $("#map-grid");
+  if (html !== mapHtml) {
+    const focused = document.activeElement?.closest?.("#add-site") ? $("#add-site input").value : null;
+    grid.innerHTML = html;
+    mapHtml = html;
+    if (focused !== null) { $("#add-site input").value = focused; $("#add-site input").focus(); }
+    requestAnimationFrame(drawMapWires);
+    setTimeout(() => $("#map").classList.add("entered"), 900);
+    for (const u of looseSites) if (!siteReach.has(u)) checkSite(u);
+  }
+  renderMapSide();
+  tick();
+}
+
+function drawMapWires() {
+  const map = $("#map");
+  const svg = $("#map-wires");
+  if (!map || map.offsetParent === null) return;
+  const box = map.getBoundingClientRect();
+  if (getComputedStyle(svg).display === "none") return;
+  const pt = (el, side) => {
+    const r = el.getBoundingClientRect();
+    return [side === "right" ? r.right - box.left : r.left - box.left, r.top - box.top + r.height / 2];
+  };
+  svg.setAttribute("viewBox", `0 0 ${box.width} ${box.height}`);
+  svg.innerHTML = "";
+  for (const p of projects.values()) {
+    const f = $(`.mnode.fr[data-framer="${CSS.escape(p.config.framerUrl)}"]`, map);
+    const g = $(`.mnode.gh[data-repo="${CSS.escape(p.full)}"]`, map);
+    if (!f || !g) continue;
+    const [st] = connState(p);
+    const path = document.createElementNS(SVGNS, "path");
+    path.id = "mw-" + p.full.replace(/[^\w-]/g, "_");
+    path.setAttribute("d", hCurve(pt(f, "right"), pt(g, "left")));
+    path.setAttribute("class", "wire" + (st === "busy" ? " busy" : st === "" ? " idle" : ""));
+    svg.append(path);
+    if (st === "ok" || st === "busy") {
+      const n = st === "busy" ? 2 : 1;
+      for (let i = 0; i < n; i++) {
+        const dot = document.createElementNS(SVGNS, "circle");
+        dot.setAttribute("r", 3);
+        dot.setAttribute("class", "runner-dot" + (st === "busy" ? " busy" : ""));
+        const dur = st === "busy" ? 1.2 : 3.4;
+        dot.innerHTML = `<animateMotion dur="${dur}s" begin="${(i * dur) / n}s" repeatCount="indefinite"><mpath href="#${path.id}"/></animateMotion>`;
+        svg.append(dot);
+      }
+    }
+  }
+  const drag = document.createElementNS(SVGNS, "path");
+  drag.id = "drag-wire";
+  drag.setAttribute("class", "wire");
+  svg.append(drag);
+}
+
+function renderMapSide() {
+  const all = [...projects.values()];
+  const loaded = all.filter((p) => p.loaded);
+  const inSync = loaded.filter((p) => connState(p)[0] === "ok").length;
+  const sites = new Set([...all.map((p) => p.config.framerUrl), ...looseSites]).size;
+  const rows = [
+    ["Framer sites", sites],
+    ["Repositories", allRepos.length || all.length],
+    ["Connections", all.length],
+    ["In sync", `${inSync} / ${all.length}`],
+    ["Schedule", "*/15 * * * *"],
+  ];
+  const dl = $("#info");
+  const infoHtml = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  if (dl.dataset.html !== infoHtml) { dl.innerHTML = infoHtml; dl.dataset.html = infoHtml; }
+
+  const items = loaded.flatMap((p) => activityItems(p, model(p)).map((i) => ({ ...i, meta: `${p.full.split("/")[1]} · ${i.meta}` })))
+    .sort((a, b) => (a.dot === "busy" ? -1 : b.dot === "busy" ? 1 : new Date(b.when) - new Date(a.when)))
+    .slice(0, 8);
+  const pending = `<li class="pending"><i class="dot"></i><span class="a-title">Next check in <span data-countdown>${clockFmt((nextCheck() - Date.now()) / 1000)}</span></span></li>`;
+  const html = pending + (items.length
+    ? items.map((i) => `<li><i class="dot ${i.dot}"></i>${i.href ? `<a class="a-title" href="${esc(i.href)}" target="_blank" rel="noopener">${esc(i.title)}</a>` : `<span class="a-title">${esc(i.title)}</span>`}<span class="a-meta">${esc(i.meta)}</span></li>`).join("")
+    : `<li><i class="dot"></i><span class="a-title">Nothing yet</span><span class="a-meta">Connect a Framer site to a repository.</span></li>`);
+  const ol = $("#activity");
+  if (ol.dataset.html !== html) { ol.innerHTML = html; ol.dataset.html = html; }
+}
+
+async function checkSite(url) {
+  siteReach.set(url, "busy");
+  try { await fetch(url + "/", { mode: "no-cors", cache: "no-store" }); siteReach.set(url, "ok"); }
+  catch { siteReach.set(url, "err"); }
+  if (!selected) { mapHtml = null; renderMap(); }
+}
+
+function addSite(url) {
+  if (![...projects.values()].some((p) => p.config.framerUrl === url) && !looseSites.includes(url)) {
+    looseSites.push(url);
+    saveSites();
+  }
+  mapHtml = null;
+  renderMap();
+  checkSite(url);
+}
+
+function suggestName(url) {
+  return host(url).replace(/^www\./, "").replace(/\.framer\.(website|app|ai)$/, "").replace(/\.[a-z]+$/, "").replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
+function finishWire(url, repo) {
+  cancelWire();
+  if (!url || !repo) return;
+  if (repo === "__new") return openConnect(url, { name: suggestName(url) });
+  if (projects.has(repo)) return toast(`${repo.split("/")[1]} is already connected`);
+  openConnect(url, { repo });
+}
+
+function cancelWire() {
+  arming = null;
+  $("#map")?.classList.remove("arming");
+  $$(".mnode.armed").forEach((n) => n.classList.remove("armed"));
+  $("#drag-wire")?.setAttribute("d", "");
+}
+
+// Drag from a Framer site's port to a repository, or tap the port and then tap a repository.
+document.addEventListener("pointerdown", (e) => {
+  const port = e.target.closest("[data-port-framer]");
+  if (!port) return;
+  e.preventDefault();
+  const url = port.dataset.portFramer;
+  const map = $("#map");
+  const box = map.getBoundingClientRect();
+  const r = port.getBoundingClientRect();
+  const from = [r.left + r.width / 2 - box.left, r.top + r.height / 2 - box.top];
+  const start = [e.clientX, e.clientY];
+  arming = { url };
+  map.classList.add("arming");
+  port.closest(".mnode").classList.add("armed");
+  const move = (ev) => {
+    const to = [ev.clientX - box.left, ev.clientY - box.top];
+    $("#drag-wire")?.setAttribute("d", hCurve(from, to));
+  };
+  const up = (ev) => {
+    removeEventListener("pointermove", move);
+    removeEventListener("pointerup", up);
+    const moved = Math.hypot(ev.clientX - start[0], ev.clientY - start[1]) > 6;
+    const target = document.elementFromPoint(ev.clientX, ev.clientY)?.closest(".mnode.gh");
+    if (target) return finishWire(url, target.dataset.repo);
+    if (moved) cancelWire(); // dropped on nothing
+    else $("#drag-wire")?.setAttribute("d", ""); // tap: wait for a repository tap
+  };
+  addEventListener("pointermove", move);
+  addEventListener("pointerup", up);
+});
+document.addEventListener("click", (e) => {
+  const open = e.target.closest("[data-open]");
+  if (open) return select(open.dataset.open);
+  const rm = e.target.closest("[data-remove-site]");
+  if (rm) {
+    looseSites = looseSites.filter((u) => u !== rm.dataset.removeSite);
+    saveSites();
+    mapHtml = null;
+    return renderMap();
+  }
+  if (arming) {
+    const target = e.target.closest(".mnode.gh");
+    if (target) return finishWire(arming.url, target.dataset.repo);
+    if (!e.target.closest("[data-port-framer]")) cancelWire();
+    return;
+  }
+  const node = e.target.closest(".mnode.linked .node-head");
+  if (node) {
+    const n = node.closest(".mnode");
+    const full = n.dataset.repo || [...projects.values()].find((p) => p.config.framerUrl === n.dataset.framer)?.full;
+    if (full) select(full);
+  }
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") cancelWire(); });
+document.addEventListener("submit", (e) => {
+  if (e.target.id !== "add-site") return;
+  e.preventDefault();
+  try {
+    addSite(normalizeFramerUrl(e.target.site.value));
+  } catch (err) {
+    toast(err.message);
+  }
+});
 
 // ------------------------------------------------------------------ wiring
 
-async function signIn(t) {
+async function signIn(t, user) {
   token = t;
-  me = await gh("/user");
+  me = user || await gh("/user");
   store.set(TOKEN_KEY, t);
   $("#avatar").src = me.avatar_url;
   $("#login").textContent = me.login;
@@ -1025,17 +1317,65 @@ function signOut() {
 $("#token-link").href =
   "https://github.com/settings/tokens/new?scopes=repo,workflow&description=Bridge";
 
+// ------------------------------------------------------------------ start screen
+
+function setConn(id, state, text) {
+  const n = $("#" + id);
+  $(".node-state .dot", n).className = "dot " + state;
+  $(".node-state span", n).textContent = text;
+  n.dataset.state = state;
+  const f = $("#cn-framer").dataset.state, g = $("#cn-github").dataset.state;
+  $("#pair-wire").className = "pair-wire" + (f === "ok" && g === "ok" ? " ok" : f === "busy" || g === "busy" ? " busy" : "");
+}
+
+/** Framer sites don't allow reading them cross-origin, but an opaque request still tells us the site answers. */
+let framerCheck = 0;
+async function checkFramer() {
+  const v = $("#signin-framer").value.trim();
+  const id = ++framerCheck;
+  if (!v) return setConn("cn-framer", "", "Not connected"), null;
+  let url;
+  try { url = normalizeFramerUrl(v); } catch (err) { setConn("cn-framer", "err", "Editor link"); return null; }
+  setConn("cn-framer", "busy", "Checking");
+  try {
+    await fetch(url + "/", { mode: "no-cors", cache: "no-store" });
+    if (id === framerCheck) setConn("cn-framer", "ok", host(url));
+    return url;
+  } catch {
+    if (id === framerCheck) setConn("cn-framer", "err", "Can't reach");
+    return url;
+  }
+}
+let framerTimer;
+$("#signin-framer").addEventListener("input", () => { clearTimeout(framerTimer); framerTimer = setTimeout(checkFramer, 600); });
+$("#signin-framer").addEventListener("blur", checkFramer);
+
 $("#signin-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const errEl = $("#signin-error");
   errEl.hidden = true;
+  const fail = (msg) => { errEl.textContent = msg; errEl.hidden = false; };
+  let framerUrl = null;
+  if ($("#signin-framer").value.trim()) {
+    try { framerUrl = normalizeFramerUrl($("#signin-framer").value); } catch (err) { setConn("cn-framer", "err", "Editor link"); return fail(err.message); }
+  }
+  const t = $("#token").value.trim();
+  if (!t) { setConn("cn-github", "err", "Token needed"); return fail("Add a GitHub token to connect your GitHub account."); }
+  setConn("cn-github", "busy", "Checking");
+  let user;
   try {
-    await signIn($("#token").value.trim());
+    token = t;
+    user = await gh("/user");
   } catch (err) {
     token = null;
-    errEl.textContent = err.status === 401 ? "GitHub didn't accept that token." : err.message;
-    errEl.hidden = false;
+    setConn("cn-github", "err", "Rejected");
+    return fail(err.status === 401 ? "GitHub didn't accept that token." : err.message);
   }
+  setConn("cn-github", "ok", user.login);
+  if (framerUrl && $("#cn-framer").dataset.state !== "ok") await checkFramer();
+  await sleep(900);
+  await signIn(t, user);
+  if (framerUrl) { select(null); addSite(framerUrl); toast("Now drag its dot to a repository"); }
 });
 $("#signout").addEventListener("click", signOut);
 $("#connect-form").addEventListener("submit", connect);
@@ -1047,13 +1387,14 @@ for (const input of $$('input[name="repo-mode"]')) {
     $("#repo-existing").hidden = isNew;
   });
 }
-$("#project-select").addEventListener("change", (e) => {
-  if (!e.target.value) return;
-  selected = e.target.value;
-  store.set(SELECTED_KEY, selected);
+function select(full) {
+  selected = full || null;
+  store.set(SELECTED_KEY, selected || "");
   drawnFor = null;
+  mapHtml = null;
   render();
-});
+}
+$("#project-select").addEventListener("change", (e) => select(e.target.value));
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#account")) $("#account").open = false;
   if (e.target.closest("#account .menu")) $("#account").open = false;
@@ -1071,6 +1412,8 @@ document.addEventListener("click", (e) => {
   if (!btn) return;
   const action = btn.dataset.action;
   if (action === "connect") return openConnect();
+  if (action === "map") return select(null);
+
   if (!selected) return;
   if (action === "sync") syncNow(selected, btn);
   if (action === "pause") togglePause(selected, btn);
@@ -1087,6 +1430,7 @@ addEventListener("resize", () => {
     fitCanvas();
     const p = projects.get(selected);
     if (p?.loaded) renderWires(p, model(p));
+    else if (!selected) drawMapWires();
   });
 });
 
