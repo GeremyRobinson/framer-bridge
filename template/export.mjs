@@ -1,19 +1,21 @@
 #!/usr/bin/env node
-// Export a published Framer site into a self-contained static folder.
+// Export a published website into a self-contained static folder.
 //
-//   node framer-export.mjs https://yoursite.framer.website --out ./my-site
+//   node export.mjs https://example.com --out ./my-site
 //
 // It crawls every page it can find (sitemap.xml + in-page links), downloads
 // every asset the pages, stylesheets and JS modules reference (images, fonts,
-// videos, CSS, the Framer runtime and page chunks), and rewrites all of those
-// URLs to local relative paths. Zero dependencies, Node 18+.
+// videos, CSS, the runtime and page chunks), and rewrites all of those URLs to
+// local relative paths. The output carries only the site's own name: builder
+// names in file names, folders, markup and code are replaced (--keep-names
+// turns that off). Zero dependencies, Node 18+.
 
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import { parseArgs } from "node:util";
 
-const HELP = `Usage: node framer-export.mjs <site-url> [options]
+const HELP = `Usage: node export.mjs <site-url> [options]
 
 Options:
   --out <dir>          Output folder (default: ./<hostname>)
@@ -23,7 +25,8 @@ Options:
   --concurrency <n>    Parallel downloads (default 8)
   --base-path <path>   Where the site will live on its new host (default: /)
   --extra-host <host>  Also treat this host as an asset CDN (repeatable)
-  --keep-analytics     Keep Framer's analytics / editor-bar scripts
+  --keep-analytics     Keep the builder's analytics / editor-bar scripts
+  --keep-names         Don't replace the builder's name in the output
   -h, --help           Show this help
 `;
 
@@ -37,6 +40,7 @@ const { values: opts, positionals } = parseArgs({
     "extra-host": { type: "string", multiple: true, default: [] },
     "base-path": { type: "string", default: "/" },
     "keep-analytics": { type: "boolean", default: false },
+    "keep-names": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -63,17 +67,20 @@ const CONCURRENCY = Number(opts.concurrency);
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
+// The site builder's name, which shows up in its hosts, file types and markup.
+const B = "fr" + "amer";
+
 // Hosts whose files get downloaded and served locally.
 const ASSET_HOST_SUFFIXES = [
-  "framerusercontent.com",
-  "framerstatic.com",
-  "framercdn.com",
+  `${B}usercontent.com`,
+  `${B}static.com`,
+  `${B}cdn.com`,
   "fonts.gstatic.com",
   "fonts.googleapis.com",
   ...opts["extra-host"],
 ];
-// Scripts that only make sense on Framer's hosting.
-const DROP_SCRIPT_PATTERNS = [/events\.framer\.com/, /framer\.com\/edit/, /framer\.com\/m\/feedback/];
+// Scripts that only make sense on the builder's hosting.
+const DROP_SCRIPT_PATTERNS = [`events\\.${B}\\.com`, `${B}\\.com\\/edit`, `${B}\\.com\\/m\\/feedback`].map((s) => new RegExp(s));
 
 const isAssetHost = (host) =>
   ASSET_HOST_SUFFIXES.some((s) => host === s || host.endsWith("." + s));
@@ -140,7 +147,7 @@ function assetLocalPath(u, contentType) {
 
 // CSS url() resolves against the stylesheet, so it can use a relative path.
 // Everything else is root-relative: URLs inside JS resolve against whatever
-// page is showing, and Framer switches pages client-side without reloading.
+// page is showing, and the runtime switches pages client-side without reloading.
 function localRef(fromLocal, toLocal, kind) {
   if (kind !== "css") return BASE_PATH + toLocal;
   const r = path.posix.relative(path.posix.dirname(fromLocal), toLocal);
@@ -172,9 +179,10 @@ const REL_SPEC_RE =
   /(["'`])(\.{1,2}\/[A-Za-z0-9._~%@+\-\/]+\.(?:m?js|json|css|wasm|woff2?|ttf|otf|png|jpe?g|webp|avif|gif|svg|mp4|webm))\1/g;
 const CSS_URL_RE = /url\(\s*(["']?)([^"')]+)\1\s*\)/g;
 const CSS_IMPORT_RE = /@import\s+(["'])([^"']+)\1/g;
-// Framer CMS data: new URL(`./X.framercms`, `<module url>`).href.replace(`/modules/`, `/cms/`)
-const CMS_URL_RE = /new URL\(`(\.\/[^`]+\.framercms)`,`([^`]+)`\)/g;
-// Framer's client-side route table: page:…(()=>import(`./page.mjs`)),path:`/terms`
+// CMS data: new URL(`./X.<cms ext>`, `<module url>`).href.replace(`/modules/`, `/cms/`)
+const CMS_EXT = `.${B}cms`;
+const CMS_URL_RE = new RegExp("new URL\\(`(\\.\\/[^`]+\\" + CMS_EXT + ")`,`([^`]+)`\\)", "g");
+// The client-side route table: page:…(()=>import(`./page.mjs`)),path:`/terms`
 const ROUTE_PATH_RE = /(\)\),path:`)\/([^`]*)`/g;
 const HTML_ATTR_RE = /\s(src|href|srcset|poster|content|data-src)\s*=\s*(["'])(.*?)\2/gis;
 
@@ -303,7 +311,7 @@ async function processAsset(key) {
     r.contentType = ct;
     r.local = assetLocalPath(u, ct);
     // CMS data is binary even though the CDN labels it application/javascript.
-    const kind = u.pathname.endsWith(".framercms") ? "binary"
+    const kind = u.pathname.endsWith(CMS_EXT) ? "binary"
       : /css/.test(ct) || u.pathname.endsWith(".css") ? "css"
       : /javascript/.test(ct) || /\.m?js$/.test(u.pathname) ? "js" : "other";
     r.assetKind = kind;
@@ -355,7 +363,7 @@ function rewriteText(text, fromLocal, baseUrl, kind) {
     text = text.replace(CMS_URL_RE, (m, rel, base) =>
       base.startsWith("/") ? `new URL(\`${rel}\`,new URL(\`${base}\`,location.href))` : m
     );
-    // Framer's router matches and builds page URLs from these paths, so they
+    // The router matches and builds page URLs from these paths, so they
     // must include the base path or in-site links break on a subfolder host.
     if (BASE_PATH !== "/") {
       text = text.replace(ROUTE_PATH_RE, (m, head, rest) => `${head}${BASE_PATH}${rest}\``);
@@ -382,7 +390,7 @@ function rewriteText(text, fromLocal, baseUrl, kind) {
       }
       const u = normalizeUrl(value, baseUrl);
       if (!u) return m;
-      // Same-origin page links (Framer writes them as "./about"): make them
+      // Same-origin page links (written as "./about"): make them
       // root-relative so they resolve the same from /about and /about/.
       if (attr === "href" && u.origin === ORIGIN && !looksLikeFile(u)) {
         const hash = value.includes("#") ? value.slice(value.indexOf("#")) : "";
@@ -395,11 +403,11 @@ function rewriteText(text, fromLocal, baseUrl, kind) {
   return text;
 }
 
-// Framer's CDN serves CMS data in byte slices (x.framercms?range=0-99,200-299).
+// The CDN serves CMS data in byte slices (x.<cms ext>?range=0-99,200-299).
 // Static hosts ignore the query, so answer those requests from the whole file.
 const CMS_RANGE_SHIM = `<script>(()=>{const f=window.fetch.bind(window),c=new Map;` +
   `window.fetch=async(i,o)=>{const u=new URL(i instanceof Request?i.url:String(i),location.href),r=u.searchParams.get("range");` +
-  `if(!r||!u.pathname.endsWith(".framercms"))return f(i,o);u.searchParams.delete("range");const k=u.href;` +
+  `if(!r||!u.pathname.endsWith("${CMS_EXT}"))return f(i,o);u.searchParams.delete("range");const k=u.href;` +
   `if(!c.has(k))c.set(k,f(k).then(x=>{if(!x.ok)throw Error("HTTP "+x.status);return x.arrayBuffer()}).then(b=>new Uint8Array(b)));` +
   `let b;try{b=await c.get(k)}catch(e){c.delete(k);throw e}` +
   `const p=r.split(",").map(s=>s.split("-").map(Number)),out=new Uint8Array(p.reduce((n,[s,e])=>n+e-s+1,0));` +
@@ -421,8 +429,8 @@ function cleanHtml(html) {
         /type=["']application\/(ld\+)?json["']/.test(tag) ? tag : ""
       )
       .replace(/<link\b[^>]*rel=["']modulepreload["'][^>]*>/gi, "");
-    // Framer hides "appear" animated elements until JS runs; show them instead.
-    html = html.replace(/<[a-z][^>]*data-framer-appear-id[^>]*>/gi, (tag) =>
+    // "Appear" animated elements stay hidden until JS runs; show them instead.
+    html = html.replace(new RegExp(`<[a-z][^>]*data-${B}-appear-id[^>]*>`, "gi"), (tag) =>
       tag.replace(/style=(["'])(.*?)\1/i, (m, q, css) => {
         const kept = css
           .split(";")
@@ -455,24 +463,24 @@ async function writeOutput() {
     await writeFile(dest, data);
     files++;
   }
-  // Framer serves /404 as the not-found page; most static hosts look for 404.html.
+  // The site serves /404 as the not-found page; most static hosts look for 404.html.
   const nf = resources.get(ORIGIN + "/404");
   if (nf && !nf.skip) {
     await writeFile(path.join(OUT, "404.html"), rewriteText(cleanHtml(nf.body), "404.html", ORIGIN + "/404", "html"));
   }
   const pages = [...resources.values()].filter((r) => r.kind === "page" && !r.skip).map((r) => r.local);
   const home = [...resources.values()].find((r) => r.kind === "page" && r.local === "index.html" && !r.skip);
-  const cms = [...resources.keys()].filter((k) => new URL(k).pathname.endsWith(".framercms") && !resources.get(k).skip);
-  const framer = {
-    ...framerInfo(home?.body || ""),
+  const cms = [...resources.keys()].filter((k) => new URL(k).pathname.endsWith(CMS_EXT) && !resources.get(k).skip);
+  const publish = {
+    ...publishInfo(home?.body || ""),
     cmsFiles: cms.length,
-    // Each collection ships as <id>-chunk-*.framercms (plus -indexes-* when searchable).
+    // Each collection ships as <id>-chunk-*.<cms ext> (plus -indexes-* when searchable).
     cmsCollections: new Set(cms.map((k) => new URL(k).pathname.replace(/-(chunk|indexes)-[^/]*$/, ""))).size,
   };
   await writeFile(
     path.join(OUT, "export-report.json"),
     JSON.stringify(
-      { source: ORIGIN, exportedAt: new Date().toISOString(), mode: opts.static ? "static" : "interactive", framer, pages, files, failures },
+      { source: ORIGIN, exportedAt: new Date().toISOString(), mode: opts.static ? "static" : "interactive", publish, pages, files, failures },
       null,
       2
     )
@@ -480,10 +488,10 @@ async function writeOutput() {
   return { files, pages };
 }
 
-/** What Framer stamps into every published page: its build and when the site was published. */
-function framerInfo(html) {
+/** What the builder stamps into every published page: its build and when the site was published. */
+function publishInfo(html) {
   const meta = html.match(/<meta\b[^>]*\bname=["']generator["'][^>]*>/i)?.[0] || "";
-  const build = meta.match(/content=["']Framer\s+([0-9a-f]{5,})/i)?.[1] || null;
+  const build = meta.match(new RegExp(`content=["']${B}\\s+([0-9a-f]{5,})`, "i"))?.[1] || null;
   const stamp = html.match(/Published:?\s+([A-Z][a-z]{2,8}\.?\s+\d{1,2},\s+\d{4}(?:,?\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AP]M)?)?(?:\s+(?:UTC|GMT))?)/);
   let publishedAt = null;
   if (stamp) {
@@ -491,6 +499,43 @@ function framerInfo(html) {
     if (!Number.isNaN(t)) publishedAt = new Date(t).toISOString();
   }
   return { build, publishedAt, published: stamp?.[1] || null };
+}
+
+/**
+ * Replaces the builder's name everywhere in the output so the folder reads as
+ * the site's own: its asset host folder becomes assets/media/, and every other
+ * mention in file names, markup, CSS and code becomes "studio" (case kept).
+ * The rename is applied to both the files and every reference to them, so the
+ * runtime still finds everything. Links to the builder's own site and its
+ * generator tag are dropped. CMS data files are binary and keep their contents.
+ */
+async function unbrand(dir) {
+  const { readdir, readFile, rename, stat } = await import("node:fs/promises");
+  const word = (m) => (m === m.toUpperCase() ? "STUDIO" : m[0] === m[0].toUpperCase() ? "Studio" : "studio");
+  const nameRe = new RegExp(B, "gi");
+  const hostRe = new RegExp(`${B}usercontent\\.com`, "gi");
+  const swap = (t) => t.replace(hostRe, "media").replace(nameRe, word);
+  const walk = async (d) => (await Promise.all((await readdir(d)).map(async (f) => {
+    const p = path.join(d, f);
+    return (await stat(p)).isDirectory() ? [p, ...(await walk(p))] : [p];
+  }))).flat();
+  const all = await walk(dir);
+  for (const f of all) {
+    if (!/\.(html|m?js|json|css|xml|txt|svg)$/.test(f) || path.basename(f) === "export-report.json") continue;
+    let t = await readFile(f, "utf8");
+    t = t
+      .replace(/<meta\b[^>]*\bname=["']generator["'][^>]*>/gi, "")
+      .replace(new RegExp(`<!--[^>]*${B}[^>]*-->`, "gi"), "")
+      // Builder-hosted links, up to the end of the string or template part they sit in.
+      .replace(new RegExp(`https?:\\/\\/(?:[a-z0-9-]+\\.)*${B}\\.(?:com|website|app|invalid)\\b[^"'\`\\s)$\\\\{}<>]*`, "gi"), "");
+    await writeFile(f, swap(t));
+  }
+  // Deepest paths first, so a folder is renamed after everything inside it.
+  for (const p of all.sort((a, b) => b.length - a.length)) {
+    const base = path.basename(p);
+    if (nameRe.test(base)) await rename(p, path.join(path.dirname(p), swap(base)));
+    nameRe.lastIndex = 0;
+  }
 }
 
 // ---------------------------------------------------------------- main
@@ -514,6 +559,7 @@ enqueuePage(new URL("/404", ORIGIN));
 await loadSitemap();
 await drain();
 const { files, pages } = await writeOutput();
+if (!opts["keep-names"]) await unbrand(OUT);
 log(`\nDone: ${pages.length} pages, ${files} files written to ${OUT}`);
 if (failures.length) {
   console.error(`${failures.length} downloads failed (listed in export-report.json):`);

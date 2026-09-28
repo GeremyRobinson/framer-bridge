@@ -3,9 +3,14 @@
 // to the GitHub REST API from the browser with the user's own token.
 
 const API = "https://api.github.com";
-const WORKFLOW_FILE = "framer-bridge.yml";
+// What Bridge installs in a repo. The names only describe the site, so nothing
+// in the repo mentions the tool the site was designed in. Repos connected
+// before the rename use the legacy names until they are reconnected.
+const WORKFLOW_FILE = "sync.yml";
 const WORKFLOW_PATH = `.github/workflows/${WORKFLOW_FILE}`;
-const CONFIG_PATH = ".framer-bridge.json";
+const CONFIG_PATH = ".site.json";
+const EXPORTER_PATH = "tools/export.mjs";
+const LEGACY = { workflow: "framer-bridge.yml", config: ".framer-bridge.json", exporter: "tools/framer-export.mjs" };
 const TOKEN_KEY = "framer-bridge:token";
 const CACHE_KEY = "framer-bridge:projects";
 const SELECTED_KEY = "framer-bridge:selected";
@@ -65,14 +70,26 @@ async function gh(path, { method = "GET", body, raw = false } = {}) {
 
 const b64decode = (s) => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g, "")), (c) => c.charCodeAt(0)));
 
+/** The repo's site config, as { framerUrl, domain, …, legacy }. */
 async function readConfig(full) {
-  try {
-    const f = await gh(`/repos/${full}/contents/${CONFIG_PATH}`);
-    return JSON.parse(b64decode(f.content));
-  } catch (err) {
-    if (err.status === 404) return null;
-    throw err;
+  for (const [path, legacy] of [[CONFIG_PATH, false], [LEGACY.config, true]]) {
+    try {
+      const c = JSON.parse(b64decode((await gh(`/repos/${full}/contents/${path}`)).content));
+      return { ...c, framerUrl: c.source || c.framerUrl, legacy };
+    } catch (err) {
+      if (err.status !== 404) throw err;
+    }
   }
+  return null;
+}
+
+/** Publish info from export-report.json (older exports call it "framer"). */
+const pub = (r) => r?.publish || r?.framer;
+const workflowOf = (p) => (p?.config?.legacy ? LEGACY.workflow : WORKFLOW_FILE);
+
+function configFile(config) {
+  const { framerUrl, legacy, source, ...rest } = config;
+  return JSON.stringify(legacy ? { framerUrl, ...rest } : { source: framerUrl, ...rest }, null, 2) + "\n";
 }
 
 /** Write several files to a branch as a single commit. */
@@ -103,7 +120,9 @@ async function commitFiles(full, files, message) {
     method: "POST",
     body: {
       base_tree: parent.tree.sha,
-      tree: Object.entries(files).map(([path, content]) => ({ path, mode: "100644", type: "blob", content })),
+      // A null content deletes the file.
+      tree: Object.entries(files).map(([path, content]) =>
+        content === null ? { path, mode: "100644", type: "blob", sha: null } : { path, mode: "100644", type: "blob", content }),
     },
   });
   const commit = await gh(`/repos/${full}/git/commits`, {
@@ -134,10 +153,10 @@ async function jobsFor(full, run) {
 async function loadStatus(p) {
   const full = p.full;
   const [runs, pages, deployments, workflow] = await Promise.all([
-    gh(`/repos/${full}/actions/workflows/${WORKFLOW_FILE}/runs?per_page=12`).catch(() => ({ workflow_runs: [] })),
+    gh(`/repos/${full}/actions/workflows/${workflowOf(p)}/runs?per_page=12`).catch(() => ({ workflow_runs: [] })),
     gh(`/repos/${full}/pages`).catch((err) => (err.status === 404 ? { missing: true } : null)),
     gh(`/repos/${full}/deployments?environment=github-pages&per_page=1`).catch(() => []),
-    gh(`/repos/${full}/actions/workflows/${WORKFLOW_FILE}`).catch(() => null),
+    gh(`/repos/${full}/actions/workflows/${workflowOf(p)}`).catch(() => null),
   ]);
   p.runs = runs.workflow_runs || [];
   const jobs = await Promise.all(p.runs.map((r) => jobsFor(full, r)));
@@ -304,8 +323,8 @@ function renderNodes(p, m) {
     <div class="box">
       ${row("Site", `<a class="site-link" href="${esc(p.config.framerUrl)}" target="_blank" rel="noopener">${esc(host(p.config.framerUrl))}</a>`)}
       ${row("Checks", p.paused ? "Paused" : "Every 15 min")}
-      ${row("Published", r?.framer?.publishedAt ? agoEl(r.framer.publishedAt) : "–")}
-      ${row("Build", esc(r?.framer?.build || "–"))}
+      ${row("Published", pub(r)?.publishedAt ? agoEl(pub(r).publishedAt) : "–")}
+      ${row("Build", esc(pub(r)?.build || "–"))}
     </div>
     <div class="box">
       ${row('Last check', cur ? agoEl(cur.run.run_started_at || cur.run.created_at) : "Not yet")}
@@ -598,9 +617,9 @@ function renderInfo(p, m) {
   const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(text)}</a>`;
   const rows = [
     ["Source", link(p.config.framerUrl, host(p.config.framerUrl))],
-    ["Framer build", esc(r?.framer?.build || "–")],
-    ["Published", r?.framer?.publishedAt ? esc(dayFmt(r.framer.publishedAt)) : "–"],
-    ["CMS", r?.framer ? `${r.framer.cmsCollections ?? "–"} collections` : "–"],
+    ["Framer build", esc(pub(r)?.build || "–")],
+    ["Published", pub(r)?.publishedAt ? esc(dayFmt(pub(r).publishedAt)) : "–"],
+    ["CMS", pub(r) ? `${pub(r).cmsCollections ?? "–"} collections` : "–"],
     ["Repository", link(`https://github.com/${p.full}`, p.full)],
     ["Address", link(url, host(url))],
     ["Pages", r ? r.pages.length : "–"],
@@ -765,7 +784,7 @@ function schedulePoll() {
 // (a "check"); repos installed before the input existed reject it with a 422,
 // so those fall back to a full sync.
 async function dispatch(full, force) {
-  const url = `/repos/${full}/actions/workflows/${WORKFLOW_FILE}/dispatches`;
+  const url = `/repos/${full}/actions/workflows/${workflowOf(projects.get(full))}/dispatches`;
   if (force) return gh(url, { method: "POST", body: { ref: "main" } });
   try {
     await gh(url, { method: "POST", body: { ref: "main", inputs: { force: "false" } } });
@@ -802,7 +821,7 @@ async function togglePause(full, button) {
   const p = projects.get(full);
   button.disabled = true;
   try {
-    await gh(`/repos/${full}/actions/workflows/${WORKFLOW_FILE}/${p.paused ? "enable" : "disable"}`, { method: "PUT" });
+    await gh(`/repos/${full}/actions/workflows/${workflowOf(p)}/${p.paused ? "enable" : "disable"}`, { method: "PUT" });
     toast(p.paused ? "Auto-sync is back on" : "Auto-sync paused");
     await refreshProject(full);
   } catch (err) {
@@ -840,25 +859,24 @@ function templateReadme(full, config) {
   const name = full.split("/")[1];
   return `# ${name}
 
-A GitHub Pages copy of the Framer site [${host(config.framerUrl)}](${config.framerUrl}),
-kept in sync by Bridge.
+The website [${host(config.framerUrl)}](${config.framerUrl}): every page, image,
+font and script, served on GitHub Pages.
 
-Every 15 minutes \`.github/workflows/${WORKFLOW_FILE}\` checks whether the Framer
-site was republished. If it was, it runs \`tools/framer-export.mjs\`, commits the
-full exported site to \`site/\` and deploys it. To update right away, press
-**Check now** in Bridge, or open the **Actions** tab, pick **Framer Bridge sync**
+\`site/\` holds the full site, one commit per publish. Every 15 minutes
+\`.github/workflows/${WORKFLOW_FILE}\` checks whether the site was republished
+and, if so, exports it with \`tools/export.mjs\`, commits it to \`site/\` and
+deploys it. To update right away, open the **Actions** tab, pick **Sync site**
 and click **Run workflow**.
 
-\`site/\` is overwritten on every sync, so edit the design in Framer, not here.
-
-Things that only work on Framer's hosting (forms, CMS search, analytics, checkout)
-won't work in this copy.
+\`site/\` is overwritten on every sync, so make design changes at the source.
+Forms, site search and analytics that depend on the original host won't work in
+this copy.
 `;
 }
 
 async function loadTemplates() {
   const [exporter, workflow] = await Promise.all(
-    ["template/framer-export.mjs", "template/framer-bridge.yml"].map((f) =>
+    ["template/export.mjs", "template/sync.yml"].map((f) =>
       fetch(f, { cache: "no-cache" }).then((r) => {
         if (!r.ok) throw new Error(`Couldn't load ${f}`);
         return r.text();
@@ -919,7 +937,7 @@ async function connect(e) {
           name: full.split("/")[1],
           private: $("#repo-private").checked,
           auto_init: true,
-          description: `GitHub Pages copy of ${host(framerUrl)}, synced from Framer by Bridge`,
+          description: host(framerUrl),
         },
       });
       step.done();
@@ -935,15 +953,19 @@ async function connect(e) {
     step.done(domain ? `Custom domain ${domain} set` : "");
 
     step = progressStep("Installing the sync workflow");
-    const config = { framerUrl, domain: domain || undefined, connectedAt: new Date().toISOString(), version: 1 };
+    const config = { framerUrl, domain: domain || undefined, connectedAt: new Date().toISOString(), version: 2 };
     const files = {
       [WORKFLOW_PATH]: t.workflow,
-      "tools/framer-export.mjs": t.exporter,
-      [CONFIG_PATH]: JSON.stringify(config, null, 2) + "\n",
+      [EXPORTER_PATH]: t.exporter,
+      [CONFIG_PATH]: configFile(config),
     };
+    // Reconnecting a repo set up with the old names replaces those files.
+    if (!isNew && (await readConfig(full).catch(() => null))?.legacy) {
+      Object.assign(files, { [`.github/workflows/${LEGACY.workflow}`]: null, [LEGACY.exporter]: null, [LEGACY.config]: null });
+    }
     const hasReadme = await gh(`/repos/${full}/contents/README.md`).then((f) => f.size > 60, () => false);
     if (!hasReadme) files["README.md"] = templateReadme(full, config);
-    await commitFiles(full, files, `Connect to Framer site ${framerUrl}\n\nInstalled by Bridge.`);
+    await commitFiles(full, files, `Set up automatic updates from ${host(framerUrl)}`);
     step.done("The first sync has started");
 
     projects.set(full, { full, config });
@@ -995,7 +1017,7 @@ async function saveSettings(e) {
     const domain = normalizeDomain($("#set-domain").value);
     const config = { ...p.config, framerUrl, domain: domain || undefined };
     if (domain !== (p.config.domain || "")) await enablePages(p.full, domain);
-    await commitFiles(p.full, { [CONFIG_PATH]: JSON.stringify(config, null, 2) + "\n" }, "Update Bridge settings");
+    await commitFiles(p.full, { [config.legacy ? LEGACY.config : CONFIG_PATH]: configFile(config) }, "Update site settings");
     p.config = config;
     saveCache();
     $("#settings-dialog").close();
@@ -1097,7 +1119,7 @@ function framerNode(url) {
     state = siteReach.get(url) || "";
     text = state === "ok" ? "reachable" : state === "err" ? "can't reach" : "not connected";
   }
-  const fr = linked.map((p) => p.report).find((r) => r?.framer)?.framer;
+  const fr = linked.map((p) => pub(p.report)).find(Boolean);
   const report = linked.map((p) => p.report).find(Boolean);
   return `<div class="node mnode fr${linked.length ? " linked" : " unlinked"}" data-framer="${esc(url)}">
     <div class="node-head">${FRAMER_ICON}<h3>${esc(host(url))}</h3><span class="node-state"><i class="dot ${state}"></i>${text}</span></div>

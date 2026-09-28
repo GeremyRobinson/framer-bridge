@@ -12,9 +12,17 @@ site to a GitHub repository and keeps a GitHub Pages copy of it in sync.
 2. Connect a project: paste the published Framer address, choose a new or
    existing repository, and optionally a custom domain. The app turns on
    GitHub Pages and commits three things to the repo:
-   - `.github/workflows/framer-bridge.yml`, the sync workflow
-   - `tools/framer-export.mjs`, the exporter
-   - `.framer-bridge.json`, the project's settings
+   - `.github/workflows/sync.yml`, the sync workflow
+   - `tools/export.mjs`, the exporter
+   - `.site.json`, the project's settings
+
+   Each sync also commits the full exported site to `site/`. Nothing Bridge
+   writes to the repo names Framer: file names, commit messages, the README
+   and the exported site itself only carry the site's own name (the exporter
+   replaces the builder's name in the output; `--keep-names` turns that off).
+   Repos connected before this used `framer-bridge.yml`, `framer-export.mjs`
+   and `.framer-bridge.json`; Bridge still reads those, and reconnecting a
+   repo swaps them for the new names.
 3. From then on, publishing in Framer is all you do. Every 15 minutes the
    workflow checks whether the Framer site changed, and if it did, exports it
    and deploys it to Pages. **Sync now** does it immediately.
@@ -36,7 +44,7 @@ A failed export never replaces the live site: the last good version stays up.
 - Anything that runs on Framer's servers doesn't work in the copy: forms,
   checkout, CMS search, analytics.
 - The exporter reads Framer's published output, so a change on Framer's side
-  can break it until the exporter is updated. Update `template/framer-export.mjs`
+  can break it until the exporter is updated. Update `template/export.mjs`
   here, then re-connect a project (or copy the file into its `tools/` folder).
 - GitHub pauses scheduled workflows in a repository after 60 days without any
   commits. Pressing **Sync now** or pushing anything wakes it up.
