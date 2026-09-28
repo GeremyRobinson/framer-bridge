@@ -461,15 +461,33 @@ async function writeOutput() {
     await writeFile(path.join(OUT, "404.html"), rewriteText(cleanHtml(nf.body), "404.html", ORIGIN + "/404", "html"));
   }
   const pages = [...resources.values()].filter((r) => r.kind === "page" && !r.skip).map((r) => r.local);
+  const home = [...resources.values()].find((r) => r.kind === "page" && r.local === "index.html" && !r.skip);
+  const framer = {
+    ...framerInfo(home?.body || ""),
+    cmsFiles: [...resources.keys()].filter((k) => new URL(k).pathname.endsWith(".framercms") && !resources.get(k).skip).length,
+  };
   await writeFile(
     path.join(OUT, "export-report.json"),
     JSON.stringify(
-      { source: ORIGIN, exportedAt: new Date().toISOString(), mode: opts.static ? "static" : "interactive", pages, files, failures },
+      { source: ORIGIN, exportedAt: new Date().toISOString(), mode: opts.static ? "static" : "interactive", framer, pages, files, failures },
       null,
       2
     )
   );
   return { files, pages };
+}
+
+/** What Framer stamps into every published page: its build and when the site was published. */
+function framerInfo(html) {
+  const meta = html.match(/<meta\b[^>]*\bname=["']generator["'][^>]*>/i)?.[0] || "";
+  const build = meta.match(/content=["']Framer\s+([0-9a-f]{5,})/i)?.[1] || null;
+  const stamp = html.match(/Published:?\s+([A-Z][a-z]{2,8}\.?\s+\d{1,2},\s+\d{4}(?:,?\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:[AP]M)?)?(?:\s+(?:UTC|GMT))?)/);
+  let publishedAt = null;
+  if (stamp) {
+    const t = Date.parse(stamp[1].replace(/,(\s+\d{1,2}:)/, "$1").replace(/\.(\s)/, "$1"));
+    if (!Number.isNaN(t)) publishedAt = new Date(t).toISOString();
+  }
+  return { build, publishedAt, published: stamp?.[1] || null };
 }
 
 // ---------------------------------------------------------------- main

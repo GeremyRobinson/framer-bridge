@@ -145,12 +145,17 @@ async function loadStatus(p) {
   p.pages = pages;
   p.lastDeploy = deployments[0]?.created_at || null;
   p.paused = !!workflow?.state && workflow.state !== "active";
-  // The export report lives on the live site; only refetch it after a deploy.
-  if (p.lastDeploy && p.reportFor !== p.lastDeploy) {
+  // The export report lives on the live site, so fetching it doubles as an
+  // uptime check (GitHub Pages allows cross-origin reads).
+  if (p.lastDeploy) {
     try {
       const res = await fetch(liveUrl(p) + "export-report.json", { cache: "no-store" });
-      if (res.ok) { p.report = await res.json(); p.reportFor = p.lastDeploy; }
-    } catch {}
+      p.liveUp = res.ok;
+      if (res.ok) p.report = await res.json();
+    } catch {
+      p.liveUp = false;
+    }
+    p.liveCheckedAt = new Date().toISOString();
   }
   p.loaded = true;
 }
@@ -205,9 +210,12 @@ function model(p) {
   if (m.export === "skip") m.export = "idle";
   const pstatus = p.pages?.status ?? (p.lastDeploy ? "built" : null);
   m.live = p.pages?.missing ? "err" : m.deploy === "busy" ? "busy" : pstatus === "built" ? "ok" : pstatus === "errored" ? "err" : "idle";
+  if (m.live === "ok" && p.liveUp === false) m.live = "err";
+  m.why = m.source === "err" ? "Framer unreachable" : m.export === "err" ? "export failed" : m.deploy === "err" ? "deploy failed"
+    : p.pages?.missing ? "Pages is off" : m.live === "err" ? "site down" : null;
 
   if (p.paused) m.badge = ["idle", "Paused"];
-  else if (m.source === "err" || m.export === "err" || m.deploy === "err" || m.live === "err") m.badge = ["err", "Needs attention"];
+  else if (m.why) m.badge = ["err", m.why[0].toUpperCase() + m.why.slice(1)];
   else if (m.running) m.badge = ["busy", m.deploy === "busy" ? "Deploying" : m.export === "busy" ? "Transferring" : "Checking Framer"];
   else if (m.live === "ok") m.badge = ["ok", "In sync"];
   else m.badge = ["idle", "Setting up"];
@@ -296,6 +304,8 @@ function renderNodes(p, m) {
     <div class="box">
       ${row("Site", `<a class="site-link" href="${esc(p.config.framerUrl)}" target="_blank" rel="noopener">${esc(host(p.config.framerUrl))}</a>`)}
       ${row("Checks", p.paused ? "Paused" : "Every 15 min")}
+      ${row("Published", r?.framer?.publishedAt ? agoEl(r.framer.publishedAt) : "–")}
+      ${row("Build", esc(r?.framer?.build || "–"))}
     </div>
     <div class="box">
       ${row('Last check', cur ? agoEl(cur.run.run_started_at || cur.run.created_at) : "Not yet")}
@@ -588,12 +598,15 @@ function renderInfo(p, m) {
   const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(text)}</a>`;
   const rows = [
     ["Source", link(p.config.framerUrl, host(p.config.framerUrl))],
+    ["Framer build", esc(r?.framer?.build || "–")],
+    ["Published", r?.framer?.publishedAt ? esc(dayFmt(r.framer.publishedAt)) : "–"],
+    ["CMS files", r?.framer ? r.framer.cmsFiles : "–"],
     ["Repository", link(`https://github.com/${p.full}`, p.full)],
     ["Address", link(url, host(url))],
     ["Pages", r ? r.pages.length : "–"],
     ["Files", r ? r.files : "–"],
     ["Mode", r ? r.mode : "–"],
-    ["Published", p.lastDeploy ? esc(dayFmt(p.lastDeploy)) : "–"],
+    ["Shipped", p.lastDeploy ? esc(dayFmt(p.lastDeploy)) : "–"],
     ["Schedule", p.paused ? "paused" : "*/15 * * * *"],
   ];
   const html = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
@@ -1019,7 +1032,15 @@ function connState(p) {
   if (!p.loaded) return ["busy", "loading"];
   if (p.paused) return ["", "paused"];
   const m = model(p);
-  return [m.badge[0], { ok: "in sync", busy: m.badge[1].toLowerCase(), err: "needs attention", idle: "setting up" }[m.badge[0]] || m.badge[1].toLowerCase()];
+  return [m.badge[0], m.badge[0] === "ok" ? "in sync" : m.badge[1].toLowerCase()];
+}
+
+/** One circle per step, so a failing connection shows where it broke. */
+function stepDots(p) {
+  if (!p.loaded) return "";
+  const m = model(p);
+  const steps = [["Framer", m.source], ["Export", m.export], ["Deploy", m.deploy], ["Live", m.live]];
+  return `<span class="steps">${steps.map(([name, st]) => `<i class="dot ${st === "idle" ? "" : st}" title="${name}: ${STATE_TEXT[st] || st}"></i>`).join("")}</span>`;
 }
 
 function mapRows() {
@@ -1058,13 +1079,19 @@ function framerNode(url) {
     state = siteReach.get(url) || "";
     text = state === "ok" ? "reachable" : state === "err" ? "can't reach" : "not connected";
   }
-  const lastPublish = linked.map((p) => p.lastDeploy).filter(Boolean).sort().pop();
+  const fr = linked.map((p) => p.report).find((r) => r?.framer)?.framer;
+  const report = linked.map((p) => p.report).find(Boolean);
   return `<div class="node mnode fr${linked.length ? " linked" : " unlinked"}" data-framer="${esc(url)}">
     <div class="node-head">${FRAMER_ICON}<h3>${esc(host(url))}</h3><span class="node-state"><i class="dot ${state}"></i>${text}</span></div>
     <div class="box">
       ${row("Site", `<a class="site-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(host(url))}</a>`)}
-      ${linked.length ? row("Last shipped", lastPublish ? `<span data-ago="${esc(lastPublish)}"></span>` : "–") : row("Repository", `<button type="button" class="link" data-remove-site="${esc(url)}">none · remove</button>`)}
+      ${linked.length ? "" : row("Repository", `<button type="button" class="link" data-remove-site="${esc(url)}">none · remove</button>`)}
     </div>
+    ${linked.length ? `<div class="box">
+      ${row("Published", fr?.publishedAt ? `<span data-ago="${esc(fr.publishedAt)}"></span>` : "–")}
+      ${row("Build", esc(fr?.build || "–"))}
+      ${row("Pages", report ? `${report.pages.length}<span class="sep">·</span>${fr?.cmsFiles ?? "–"} cms` : "–")}
+    </div>` : ""}
     <button type="button" class="mport out" data-port-framer="${esc(url)}" title="Drag to a repository to connect" aria-label="Connect ${esc(host(url))} to a repository"></button>
   </div>`;
 }
@@ -1097,7 +1124,7 @@ function renderMap() {
   const html = `<div class="map-col-title">Framer</div><div></div><div class="map-col-title">GitHub</div>` + rows.map(({ f, g, p }) => {
     const [st, text] = p ? connState(p) : [];
     return `<div class="mcell fr">${f ? framerNode(f) : ""}</div>` +
-      `<div class="mmid">${p ? `<button type="button" class="mlabel" data-open="${esc(p.full)}"><i class="dot ${st}"></i><span class="mono">${esc(text)}</span></button>` : ""}</div>` +
+      `<div class="mmid">${p ? `<button type="button" class="mlabel${st === "err" ? " is-err" : ""}" data-open="${esc(p.full)}" title="Framer · Export · Deploy · Live">${stepDots(p)}<span class="mono">${esc(text)}</span></button>` : ""}</div>` +
       `<div class="mcell gh">${g ? githubNode(g) : ""}</div>`;
   }).join("");
   const grid = $("#map-grid");
@@ -1111,6 +1138,12 @@ function renderMap() {
     for (const u of looseSites) if (!siteReach.has(u)) checkSite(u);
   }
   renderMapSide();
+  const all = [...projects.values()];
+  const failing = all.filter((p) => connState(p)[0] === "err").length;
+  const syncing = all.filter((p) => connState(p)[0] === "busy" && p.loaded).length;
+  $("#map-summary").textContent = !all.length ? "none yet"
+    : `${all.length} · ${failing ? `${failing} failing` : syncing ? `${syncing} syncing` : "all healthy"}`;
+  $("#map-summary-dot").className = "dot " + (!all.length ? "" : failing ? "err" : syncing ? "busy" : "ok");
   tick();
 }
 
@@ -1164,6 +1197,7 @@ function renderMapSide() {
     ["Repositories", allRepos.length || all.length],
     ["Connections", all.length],
     ["In sync", `${inSync} / ${all.length}`],
+    ["Failing", all.filter((p) => connState(p)[0] === "err").length],
     ["Schedule", "*/15 * * * *"],
   ];
   const dl = $("#info");

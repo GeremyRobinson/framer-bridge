@@ -15,10 +15,10 @@
       <a class="wordmark" href="./">Bridge</a>
       <span class="bar-end">
         <span class="bar-right" id="top-clock"><i class="dot" id="clock-dot"></i><span id="clock-text" class="mono">Framer → GitHub Pages</span></span>
-        <span class="theme mono" role="group" aria-label="Appearance">
-          <button type="button" data-theme-set="light">light</button>
-          <button type="button" data-theme-set="dark">dark</button>
-          <button type="button" data-theme-set="system">system</button>
+        <span class="theme" role="group" aria-label="Appearance">
+          <button type="button" data-theme-set="light" title="Light" aria-label="Light"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M3.4 12.6l1.06-1.06M11.54 4.46l1.06-1.06"/></svg></button>
+          <button type="button" data-theme-set="dark" title="Dark" aria-label="Dark"><svg viewBox="0 0 16 16"><path d="M13.5 9.6A5.75 5.75 0 1 1 6.4 2.5a4.5 4.5 0 0 0 7.1 7.1Z"/></svg></button>
+          <button type="button" data-theme-set="system" title="System" aria-label="System"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="8.5" rx="1.5"/><path d="M5.5 14h5M8 11v3"/></svg></button>
         </span>
       </span>
     </header>
@@ -95,7 +95,7 @@
         <main class="stage">
           <div id="stage-map" class="panel map-panel" hidden>
             <div class="canvas-head">
-              <span>Connections</span>
+              <span class="map-title">Connections <i class="dot" id="map-summary-dot"></i><span id="map-summary" class="mono muted"></span></span>
               <span class="muted map-hint">Drag from a Framer site's dot to a repository to connect them</span>
             </div>
             <div class="map" id="map">
