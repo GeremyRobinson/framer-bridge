@@ -462,9 +462,12 @@ async function writeOutput() {
   }
   const pages = [...resources.values()].filter((r) => r.kind === "page" && !r.skip).map((r) => r.local);
   const home = [...resources.values()].find((r) => r.kind === "page" && r.local === "index.html" && !r.skip);
+  const cms = [...resources.keys()].filter((k) => new URL(k).pathname.endsWith(".framercms") && !resources.get(k).skip);
   const framer = {
     ...framerInfo(home?.body || ""),
-    cmsFiles: [...resources.keys()].filter((k) => new URL(k).pathname.endsWith(".framercms") && !resources.get(k).skip).length,
+    cmsFiles: cms.length,
+    // Each collection ships as <id>-chunk-*.framercms (plus -indexes-* when searchable).
+    cmsCollections: new Set(cms.map((k) => new URL(k).pathname.replace(/-(chunk|indexes)-[^/]*$/, ""))).size,
   };
   await writeFile(
     path.join(OUT, "export-report.json"),

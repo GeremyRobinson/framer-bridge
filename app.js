@@ -600,7 +600,7 @@ function renderInfo(p, m) {
     ["Source", link(p.config.framerUrl, host(p.config.framerUrl))],
     ["Framer build", esc(r?.framer?.build || "–")],
     ["Published", r?.framer?.publishedAt ? esc(dayFmt(r.framer.publishedAt)) : "–"],
-    ["CMS files", r?.framer ? r.framer.cmsFiles : "–"],
+    ["CMS", r?.framer ? `${r.framer.cmsCollections ?? "–"} collections` : "–"],
     ["Repository", link(`https://github.com/${p.full}`, p.full)],
     ["Address", link(url, host(url))],
     ["Pages", r ? r.pages.length : "–"],
@@ -1090,7 +1090,7 @@ function framerNode(url) {
     ${linked.length ? `<div class="box">
       ${row("Published", fr?.publishedAt ? `<span data-ago="${esc(fr.publishedAt)}"></span>` : "–")}
       ${row("Build", esc(fr?.build || "–"))}
-      ${row("Pages", report ? `${report.pages.length}<span class="sep">·</span>${fr?.cmsFiles ?? "–"} cms` : "–")}
+      ${row("Pages", report ? `${report.pages.length}<span class="sep">·</span>${fr?.cmsCollections ?? "–"} cms` : "–")}
     </div>` : ""}
     <button type="button" class="mport out" data-port-framer="${esc(url)}" title="Drag to a repository to connect" aria-label="Connect ${esc(host(url))} to a repository"></button>
   </div>`;
