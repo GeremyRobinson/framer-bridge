@@ -24,7 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Collect the site files
-        run: mkdir _site && cp -r index.html app.js style.css template _site/
+        run: |
+          mkdir _site && cp -r index.html app.js style.css template _site/
+          # Version the script and stylesheet so browsers never mix an old
+          # copy of one with a new copy of the page.
+          v=$(echo "$GITHUB_SHA" | cut -c1-7)
+          sed -i "s/app\.js\"/app.js?v=$v\"/; s/style\.css\"/style.css?v=$v\"/" _site/index.html
+          grep -o '[a-z]*\.[a-z]*?v=[0-9a-f]*' _site/index.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
