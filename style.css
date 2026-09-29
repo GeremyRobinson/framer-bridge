@@ -242,7 +242,8 @@ input.pill::placeholder { color: var(--faint); }
 .node-head h3 { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .node-state { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
 .box { background: var(--well); border-radius: 12px; padding: 6px 12px; }
-.box + .box { margin-top: 4px; }
+/* Same as the card's own padding, so the boxes are evenly spaced inside it. */
+.box + .box { margin-top: 6px; }
 .row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 2px 0; }
 .row > span:first-child { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .row > b { font-weight: 400; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

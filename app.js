@@ -1220,18 +1220,22 @@ function stepDots(p) {
 }
 
 function mapRows() {
-  const conns = [...projects.values()].sort((a, b) => host(a.config.framerUrl).localeCompare(host(b.config.framerUrl)) || a.full.localeCompare(b.full));
+  // Newest first, under the "add" row: connections by when their repo was
+  // created, sites in the order they were added, repos by creation too.
+  const created = new Map(allRepos.map((r) => [r.full_name, r.created_at || ""]));
+  const newest = (a, b) => (created.get(b) || "").localeCompare(created.get(a) || "") || a.localeCompare(b);
+  const conns = [...projects.values()].sort((a, b) => newest(a.full, b.full));
   const seen = new Set();
   const rows = conns.map((p) => {
     const f = seen.has(p.config.framerUrl) ? null : p.config.framerUrl;
     seen.add(p.config.framerUrl);
     return { f, g: p.full, p };
   });
-  const sites = looseSites.filter((u) => !seen.has(u));
-  const repos = allRepos.filter((r) => !projects.has(r.full_name)).slice(0, 6).map((r) => r.full_name);
+  const sites = looseSites.filter((u) => !seen.has(u)).reverse();
+  const repos = allRepos.filter((r) => !projects.has(r.full_name)).map((r) => r.full_name).sort(newest).slice(0, 6);
   const n = Math.max(sites.length, repos.length);
   for (let i = 0; i < n; i++) rows.push({ f: sites[i] || null, g: repos[i] || null });
-  rows.push({ f: "__add", g: "__new" });
+  rows.unshift({ f: "__add", g: "__new" });
   return rows;
 }
 
