@@ -16,9 +16,17 @@ const CONFIG_PATH = ".site.json";
 const EXPORTER_PATH = "tools/export.mjs";
 const PROJECT_TOOL_PATH = "tools/project.mjs";
 const REACT_TOOL_PATH = "tools/react.mjs";
+// Repo-to-repo links: .links.json lists the folders a repo pulls from others
+// ("pull") and the repos to tell when it changes ("push").
+const LINKS_PATH = ".links.json";
+const PULL_WORKFLOW = "pull.yml";
+const NOTIFY_WORKFLOW = "notify.yml";
+const LINKS_TOOL_PATH = "tools/links.mjs";
+const SYNC_SECRET = "SYNC_TOKEN";
 const LEGACY = { workflow: "framer-bridge.yml", config: ".framer-bridge.json", exporter: "tools/framer-export.mjs" };
 const TOKEN_KEY = "framer-bridge:token";
 const CACHE_KEY = "framer-bridge:projects";
+const LINKS_CACHE_KEY = "framer-bridge:links";
 const SELECTED_KEY = "framer-bridge:selected";
 const CANVAS_W = 900;
 const CANVAS_H = 500;
@@ -46,14 +54,20 @@ const PENDING_SITE_KEY = "framer-bridge:pending-site";
 let allRepos = [];
 /** Framer sites added on the map but not connected yet. */
 let looseSites = (() => { try { return JSON.parse(store.get(SITES_KEY) || "[]"); } catch { return []; } })();
+const REPO_SOURCES_KEY = "framer-bridge:repo-sources";
+/** Repositories added on the map as sources but not linked yet. */
+let looseRepos = (() => { try { return JSON.parse(store.get(REPO_SOURCES_KEY) || "[]"); } catch { return []; } })();
+/** full_name -> { full, links: { pull, push }, runs, loaded }, for repos with a .links.json */
+const linkRepos = new Map();
 /** Signed in through Supabase: its user id, so settings follow the user. */
 let accountId = null;
 let pushTimer;
 const saveSites = () => {
   store.set(SITES_KEY, JSON.stringify(looseSites));
+  store.set(REPO_SOURCES_KEY, JSON.stringify(looseRepos));
   if (!accountId) return;
   clearTimeout(pushTimer);
-  pushTimer = setTimeout(() => account.saveSettings(accountId, { sites: looseSites }).catch((err) => console.warn("Couldn't save settings", err)), 500);
+  pushTimer = setTimeout(() => account.saveSettings(accountId, { sites: looseSites, repos: looseRepos }).catch((err) => console.warn("Couldn't save settings", err)), 500);
 };
 
 /** Brings in the sites saved on other devices. */
@@ -62,9 +76,12 @@ async function pullSettings() {
   try {
     const remote = await account.loadSettings(accountId);
     const merged = [...new Set([...(remote.sites || []), ...looseSites])];
-    const changed = merged.length !== (remote.sites || []).length;
+    const mergedRepos = [...new Set([...(remote.repos || []), ...looseRepos])];
+    const changed = merged.length !== (remote.sites || []).length || mergedRepos.length !== (remote.repos || []).length;
     looseSites = merged;
+    looseRepos = mergedRepos;
     store.set(SITES_KEY, JSON.stringify(looseSites));
+    store.set(REPO_SOURCES_KEY, JSON.stringify(looseRepos));
     if (changed) saveSites();
     mapHtml = null;
     render();
@@ -115,6 +132,18 @@ async function readConfig(full) {
   return null;
 }
 
+/** The repo's links, as { pull: [...], push: [...] }, or null without a .links.json. */
+async function readLinks(full, ref) {
+  try {
+    const c = JSON.parse(b64decode((await gh(`/repos/${full}/contents/${LINKS_PATH}${ref ? `?ref=${encodeURIComponent(ref)}` : ""}`)).content));
+    return { pull: c.pull || [], push: c.push || [] };
+  } catch (err) {
+    if (err.status === 404) return null;
+    throw err;
+  }
+}
+const linksFile = (links) => JSON.stringify({ pull: links.pull, push: links.push }, null, 2) + "\n";
+
 /** Publish info from export-report.json (older exports call it "framer"). */
 const pub = (r) => r?.publish || r?.framer;
 const workflowOf = (p) => (p?.config?.legacy ? LEGACY.workflow : WORKFLOW_FILE);
@@ -125,13 +154,13 @@ function configFile(config) {
 }
 
 /** Write several files to a branch as a single commit. */
-async function commitFiles(full, files, message) {
+async function commitFiles(full, files, message, branch = "main") {
   let ref;
   try {
     // A just-created repository can take a moment to get its first branch.
     for (let i = 0; ; i++) {
       try {
-        ref = await gh(`/repos/${full}/git/ref/heads/main`);
+        ref = await gh(`/repos/${full}/git/ref/heads/${branch}`);
         break;
       } catch (err) {
         if (i >= 4 || (err.status !== 404 && err.status !== 409)) throw err;
@@ -143,9 +172,9 @@ async function commitFiles(full, files, message) {
     // Empty repository: the Git Data API needs one commit to exist first.
     await gh(`/repos/${full}/contents/README.md`, {
       method: "PUT",
-      body: { message: "Initial commit", content: btoa("# " + full.split("/")[1] + "\n"), branch: "main" },
+      body: { message: "Initial commit", content: btoa("# " + full.split("/")[1] + "\n"), branch },
     });
-    ref = await gh(`/repos/${full}/git/ref/heads/main`);
+    ref = await gh(`/repos/${full}/git/ref/heads/${branch}`);
   }
   const parent = await gh(`/repos/${full}/git/commits/${ref.object.sha}`);
   const tree = await gh(`/repos/${full}/git/trees`, {
@@ -161,7 +190,7 @@ async function commitFiles(full, files, message) {
     method: "POST",
     body: { message, tree: tree.sha, parents: [parent.sha] },
   });
-  await gh(`/repos/${full}/git/refs/heads/main`, { method: "PATCH", body: { sha: commit.sha } });
+  await gh(`/repos/${full}/git/refs/heads/${branch}`, { method: "PATCH", body: { sha: commit.sha } });
 }
 
 async function enablePages(full, domain) {
@@ -211,6 +240,37 @@ async function loadStatus(p) {
   p.loaded = true;
 }
 
+/** A linked repo's pull runs, and when each folder it pulls last changed. */
+async function loadLinkStatus(d) {
+  if (!d.links.pull.length) { d.runs = []; d.loaded = true; return; }
+  const runs = await gh(`/repos/${d.full}/actions/workflows/${PULL_WORKFLOW}/runs?per_page=6`).catch(() => ({ workflow_runs: [] }));
+  d.runs = runs.workflow_runs || [];
+  // A folder can only have changed if a run finished since the last look.
+  const key = JSON.stringify([d.runs[0]?.id, d.runs[0]?.status, d.links.pull]);
+  if (key !== d.updatesKey) {
+    d.updatesKey = key;
+    d.updates = await Promise.all(d.links.pull.map((l) =>
+      gh(`/repos/${d.full}/commits?path=${encodeURIComponent(l.into)}&per_page=1`).then((c) => c[0] || null, () => null)));
+  }
+  d.loaded = true;
+}
+
+/** [dot state, words] for the links into a repo, which share one pull workflow. */
+function linkState(d) {
+  if (!d?.loaded) return ["busy", "loading"];
+  const run = d.runs?.[0];
+  if (!run) return ["", "waiting"];
+  if (run.status !== "completed") return ["busy", "pulling"];
+  if (run.conclusion === "success") return ["ok", "in sync"];
+  if (run.conclusion === "failure") return ["err", "failed"];
+  return ["", run.conclusion || "waiting"];
+}
+
+/** Every repo-to-repo link, one per folder pulled. */
+function allLinks() {
+  return [...linkRepos.values()].flatMap((d) => d.links.pull.map((l, i) => ({ ...l, dest: d.full, d, i, id: `${d.full}#${i}` })));
+}
+
 function jobState(job) {
   if (!job) return "none";
   if (job.status !== "completed") return "busy";
@@ -225,7 +285,7 @@ const secs = (a, b) => (a && b ? Math.max(0, Math.round((new Date(b) - new Date(
 function runInfo(p, run) {
   const jobs = p.jobs?.get(run.id) || [];
   const find = (name) => jobs.find((j) => j.name === name);
-  const check = find("Check Framer"), build = find("Export"), deploy = find("Deploy");
+  const check = find("Check for changes") || find("Check Framer"), build = find("Export"), deploy = find("Deploy");
   const s = { check: jobState(check), build: jobState(build), deploy: jobState(deploy) };
   let changed = null;
   if (s.check === "ok" && s.build !== "none") changed = s.build !== "skip";
@@ -791,6 +851,31 @@ function toast(text) {
 
 function saveCache() {
   store.set(CACHE_KEY, JSON.stringify([...projects.values()].map((p) => ({ full: p.full, config: p.config }))));
+  store.set(LINKS_CACHE_KEY, JSON.stringify([...linkRepos.values()].map((d) => ({ full: d.full, links: d.links }))));
+}
+
+/** Track a repo's links, refreshing its status when they're new or changed. */
+function setLinks(full, links) {
+  const d = linkRepos.get(full);
+  if (d && JSON.stringify(d.links) === JSON.stringify(links)) return;
+  if (!links.pull.length && !links.push.length) { linkRepos.delete(full); mapHtml = null; render(); return; }
+  linkRepos.set(full, { ...(d || {}), full, links });
+  mapHtml = null;
+  render();
+  refreshLinks(full);
+}
+
+async function refreshLinks(full) {
+  const d = linkRepos.get(full);
+  if (!d) return;
+  try {
+    await loadLinkStatus(d);
+  } catch (err) {
+    console.warn(full, err);
+  }
+  render();
+  renderLinkInfo();
+  schedulePoll();
 }
 
 async function scanProjects() {
@@ -803,12 +888,20 @@ async function scanProjects() {
   }
   allRepos = repos.filter((r) => r.permissions?.push);
   const found = new Set();
+  const foundLinks = new Set();
   let i = 0;
   await Promise.all(Array.from({ length: 8 }, async () => {
     while (i < repos.length) {
       const r = repos[i++];
       if (!r.permissions?.push) continue;
-      const config = await readConfig(r.full_name).catch(() => null);
+      const [config, links] = await Promise.all([
+        readConfig(r.full_name).catch(() => null),
+        readLinks(r.full_name).catch(() => null),
+      ]);
+      if (links && (links.pull.length || links.push.length)) {
+        foundLinks.add(r.full_name);
+        setLinks(r.full_name, links);
+      }
       if (!config?.framerUrl) continue;
       found.add(r.full_name);
       if (!projects.has(r.full_name)) {
@@ -821,6 +914,7 @@ async function scanProjects() {
     }
   }));
   for (const full of [...projects.keys()]) if (!found.has(full)) projects.delete(full);
+  for (const full of [...linkRepos.keys()]) if (!foundLinks.has(full)) linkRepos.delete(full);
   saveCache();
   scanned = true;
   $("#scan-status").textContent = "";
@@ -840,12 +934,12 @@ async function refreshProject(full) {
 }
 
 function refreshAll() {
-  return Promise.all([...projects.keys()].map(refreshProject));
+  return Promise.all([...[...projects.keys()].map(refreshProject), ...[...linkRepos.keys()].map(refreshLinks)]);
 }
 
 function schedulePoll() {
   clearTimeout(pollTimer);
-  const anyRunning = [...projects.values()].some((p) => p.runs?.[0] && p.runs[0].status !== "completed");
+  const anyRunning = [...projects.values(), ...linkRepos.values()].some((p) => p.runs?.[0] && p.runs[0].status !== "completed");
   pollTimer = setTimeout(() => {
     if (document.visibilityState === "visible") refreshAll();
     else schedulePoll();
@@ -1202,7 +1296,7 @@ const FRAMER_ICON = '<svg viewBox="0 0 24 24"><path d="M5 3h14v6H12L5 3Z"/><path
 const GITHUB_ICON = '<svg viewBox="0 0 24 24"><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>';
 const siteReach = new Map(); // framer url -> "ok" | "err" | "busy"
 let mapHtml = null;
-let arming = null; // { url } while a new wire is being drawn
+let arming = null; // { key } while a new wire is being drawn
 
 function connState(p) {
   if (!p.loaded) return ["busy", "loading"];
@@ -1219,41 +1313,69 @@ function stepDots(p) {
   return `<span class="steps">${steps.map(([name, st]) => `<i class="dot ${st === "idle" ? "" : st}" title="${name}: ${STATE_TEXT[st] || st}"></i>`).join("")}</span>`;
 }
 
+/** The worst of several states: a failure shows first, then work in progress. */
+const worst = (states) => (states.includes("err") ? "err" : states.includes("busy") ? "busy" : states.includes("ok") ? "ok" : "");
+
+// Sources on the left of the map are keyed by their Framer address, or by
+// "repo:owner/name" for a GitHub repository.
+const REPO_KEY = "repo:";
+const isRepoKey = (k) => k.startsWith(REPO_KEY);
+/** What the Add card adds: a Framer "site" or a GitHub "repo". */
+let addKind = "site";
+
 function mapRows() {
   // Newest first, under the "add" row: connections by when their repo was
-  // created, sites in the order they were added, repos by creation too.
+  // created, sources in the order they were added, repos by creation too.
   const created = new Map(allRepos.map((r) => [r.full_name, r.created_at || ""]));
   const newest = (a, b) => (created.get(b) || "").localeCompare(created.get(a) || "") || a.localeCompare(b);
-  const conns = [...projects.values()].sort((a, b) => newest(a.full, b.full));
-  const seen = new Set();
-  const rows = conns.map((p) => {
-    const f = seen.has(p.config.framerUrl) ? null : p.config.framerUrl;
-    seen.add(p.config.framerUrl);
-    return { f, g: p.full, p };
+  const conns = [
+    ...[...projects.values()].map((p) => ({ s: p.config.framerUrl, g: p.full, p })),
+    ...allLinks().map((l) => ({ s: REPO_KEY + l.repo, g: l.dest, l })),
+  ].sort((a, b) => newest(a.g, b.g));
+  // Each source and each repository shows once; its other connections wire to it.
+  const seenS = new Set(), seenG = new Set();
+  const rows = conns.map((c) => {
+    const r = { s: seenS.has(c.s) ? null : c.s, g: seenG.has(c.g) ? null : c.g, p: c.p, l: c.l };
+    seenS.add(c.s);
+    seenG.add(c.g);
+    return r;
   });
-  const sites = looseSites.filter((u) => !seen.has(u)).reverse();
-  const repos = allRepos.filter((r) => !projects.has(r.full_name)).map((r) => r.full_name).sort(newest).slice(0, 6);
-  const n = Math.max(sites.length, repos.length);
-  for (let i = 0; i < n; i++) rows.push({ f: sites[i] || null, g: repos[i] || null });
-  rows.unshift({ f: "__add", g: "__new" });
+  const sources = [...looseSites, ...looseRepos.map((r) => REPO_KEY + r)].filter((k) => !seenS.has(k)).reverse();
+  const repos = allRepos.filter((r) => !seenG.has(r.full_name)).map((r) => r.full_name).sort(newest).slice(0, 6);
+  const n = Math.max(sources.length, repos.length);
+  for (let i = 0; i < n; i++) rows.push({ s: sources[i] || null, g: repos[i] || null });
+  rows.unshift({ s: "__add", g: "__new" });
   return rows;
 }
 
+function sourceNode(key) {
+  if (key === "__add") return addNode();
+  return isRepoKey(key) ? repoSourceNode(key.slice(REPO_KEY.length)) : framerNode(key);
+}
+
+function addNode() {
+  const repo = addKind === "repo";
+  return `<form class="node mnode fr add" id="add-site">
+    <div class="node-head">${repo ? GITHUB_ICON : FRAMER_ICON}<h3>Add a source</h3></div>
+    <div class="box">
+      <fieldset class="seg add-kind">
+        <legend class="sr">Kind of source</legend>
+        <label><input type="radio" name="kind" value="site"${repo ? "" : " checked"}><span>Framer site</span></label>
+        <label><input type="radio" name="kind" value="repo"${repo ? " checked" : ""}><span>GitHub repo</span></label>
+      </fieldset>
+      <input class="pill mono" name="site" type="text" autocomplete="off" ${repo
+        ? 'list="repo-options" placeholder="owner/repository" aria-label="GitHub repository"'
+        : 'inputmode="url" placeholder="yoursite.framer.website" aria-label="Published Framer site"'}>
+      <button class="pill pill-btn" type="submit">Add<i class="tri right"></i></button>
+    </div>
+  </form>`;
+}
+
 function framerNode(url) {
-  if (url === "__add") {
-    return `<form class="node mnode fr add" id="add-site">
-      <div class="node-head">${FRAMER_ICON}<h3>Add a Framer site</h3></div>
-      <div class="box">
-        <input class="pill mono" name="site" type="text" inputmode="url" placeholder="yoursite.framer.website" aria-label="Published Framer site">
-        <button class="pill pill-btn" type="submit">Add<i class="tri right"></i></button>
-      </div>
-    </form>`;
-  }
   const linked = [...projects.values()].filter((p) => p.config.framerUrl === url);
   let state, text;
   if (linked.length) {
-    const states = linked.map((p) => connState(p)[0]);
-    state = states.includes("err") ? "err" : states.includes("busy") ? "busy" : states.includes("ok") ? "ok" : "";
+    state = worst(linked.map((p) => connState(p)[0]));
     text = linked.length === 1 ? "connected" : `${linked.length} repos`;
   } else {
     state = siteReach.get(url) || "";
@@ -1261,7 +1383,7 @@ function framerNode(url) {
   }
   const fr = linked.map((p) => pub(p.report)).find(Boolean);
   const report = linked.map((p) => p.report).find(Boolean);
-  return `<div class="node mnode fr${linked.length ? " linked" : " unlinked"}" data-framer="${esc(url)}">
+  return `<div class="node mnode fr${linked.length ? " linked" : " unlinked"}" data-source="${esc(url)}" data-framer="${esc(url)}">
     <div class="node-head">${FRAMER_ICON}<h3>${esc(host(url))}</h3><span class="node-state"><i class="dot ${state}"></i>${text}</span></div>
     <div class="box">
       ${row("Site", `<a class="site-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(host(url))}</a>`)}
@@ -1272,8 +1394,32 @@ function framerNode(url) {
       ${row("Build", esc(fr?.build || "–"))}
       ${row("Pages", report ? `${report.pages.length}<span class="sep">·</span>${fr?.cmsCollections ?? "–"} cms` : "–")}
     </div>` : ""}
-    <button type="button" class="mport out" data-port-framer="${esc(url)}" title="Drag to a repository to connect" aria-label="Connect ${esc(host(url))} to a repository"></button>
+    <button type="button" class="mport out" data-port-source="${esc(url)}" title="Drag to a repository to connect" aria-label="Connect ${esc(host(url))} to a repository"></button>
   </div>`;
+}
+
+function repoSourceNode(full) {
+  const key = REPO_KEY + full;
+  const links = allLinks().filter((l) => l.repo === full);
+  const [owner, name] = full.split("/");
+  const state = links.length ? worst(links.map((l) => linkState(l.d)[0])) : "";
+  const text = !links.length ? "not linked" : links.length === 1 ? "linked" : `${links.length} links`;
+  const uniq = (xs) => [...new Set(xs)].join(", ");
+  return `<div class="node mnode fr repo${links.length ? " linked" : " unlinked"}" data-source="${esc(key)}">
+    <div class="node-head">${GITHUB_ICON}<h3>${esc(name)}</h3><span class="node-state"><i class="dot ${state}"></i>${text}</span></div>
+    <div class="box">
+      ${row("Repo", `<a class="site-link" href="https://github.com/${esc(full)}" target="_blank" rel="noopener">${esc(owner)}/${esc(name)}</a>`)}
+      ${links.length
+        ? row("Branch", esc(uniq(links.map((l) => l.branch || "default")))) + row("Folder", esc(uniq(links.map((l) => (l.path ? l.path + "/" : "all")))))
+        : row("Linked to", `<button type="button" class="link" data-remove-repo="${esc(full)}">none · remove</button>`)}
+    </div>
+    <button type="button" class="mport out" data-port-source="${esc(key)}" title="Drag to a repository to link" aria-label="Link ${esc(full)} to a repository"></button>
+  </div>`;
+}
+
+/** When a linked folder last changed in its destination. */
+function lastUpdate(d) {
+  return (d?.updates || []).map((c) => c?.commit?.committer?.date).filter(Boolean).sort().pop() || null;
 }
 
 function githubNode(full) {
@@ -1285,45 +1431,80 @@ function githubNode(full) {
     </div>`;
   }
   const p = projects.get(full);
+  const d = linkRepos.get(full);
+  const pulls = d?.links.pull.length || 0;
   const r = allRepos.find((x) => x.full_name === full);
   const [owner, name] = full.split("/");
-  const [state, text] = p ? connState(p) : ["", r?.private ? "private" : "public"];
   const url = p ? liveUrl(p) : null;
-  return `<div class="node mnode gh${p ? " linked" : ""}" data-repo="${esc(full)}">
+  let state = "", text = r?.private ? "private" : "public";
+  if (p) {
+    [state, text] = connState(p);
+    if (url && state !== "err" && state !== "busy") text = "live";
+    if (pulls) state = worst([state, linkState(d)[0]]);
+  } else if (pulls) {
+    [state, text] = linkState(d);
+  }
+  const updated = pulls ? lastUpdate(d) : null;
+  return `<div class="node mnode gh${p || pulls ? " linked" : ""}" data-repo="${esc(full)}">
     <button type="button" class="mport in" data-port-repo="${esc(full)}" aria-label="Connect to ${esc(full)}"></button>
-    <div class="node-head">${GITHUB_ICON}<h3>${esc(name)}</h3><span class="node-state">${p ? `<i class="dot ${state}"></i>` : ""}${esc(p ? (url ? "live" : text) : text)}</span></div>
+    <div class="node-head">${GITHUB_ICON}<h3>${esc(name)}</h3><span class="node-state">${p || pulls ? `<i class="dot ${state}"></i>` : ""}${esc(text)}</span></div>
     <div class="box">
       ${row("Repo", `<a class="site-link" href="https://github.com/${esc(full)}" target="_blank" rel="noopener">${esc(owner)}/${esc(name)}</a>`)}
-      ${row("Live", url ? `<a class="site-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(host(url))}</a>` : "–")}
+      ${p || !pulls ? row("Live", url ? `<a class="site-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(host(url))}</a>` : "–") : ""}
+      ${pulls ? row("Pulls", `${pulls} folder${pulls > 1 ? "s" : ""}<span class="sep">·</span>${updated ? agoEl(updated) : "not yet"}`) : ""}
     </div>
   </div>`;
 }
 
+function linkLabel(l) {
+  const [st, text] = linkState(l.d);
+  const from = `${l.repo}${l.path ? "/" + l.path : ""}`;
+  return `<button type="button" class="mlabel${st === "err" ? " is-err" : ""}" data-link="${esc(l.id)}" title="${esc(`${from} → ${l.dest}/${l.into}`)}"><i class="dot ${st}"></i><span class="mono">${esc(text)}</span></button>`;
+}
+
+const wireId = (raw) => raw.replace(/[^\w-]/g, "_");
+
 function renderMap() {
   const rows = mapRows();
-  const html = `<div class="map-col-title">Framer</div><div></div><div class="map-col-title">GitHub</div>` + rows.map(({ f, g, p }) => {
-    const [st, text] = p ? connState(p) : [];
-    return `<div class="mcell fr">${f ? framerNode(f) : ""}</div>` +
-      `<div class="mmid">${p ? `<button type="button" class="mlabel${st === "err" ? " is-err" : ""}" data-open="${esc(p.full)}" title="Framer · Export · Deploy · Live">${stepDots(p)}<span class="mono">${esc(text)}</span></button>` : ""}</div>` +
+  let floats = "";
+  const html = `<div class="map-col-title">Sources</div><div></div><div class="map-col-title">Destinations</div>` + rows.map(({ s, g, p, l }) => {
+    let mid = "";
+    if (p) {
+      const [st, text] = connState(p);
+      mid = `<button type="button" class="mlabel${st === "err" ? " is-err" : ""}" data-open="${esc(p.full)}" title="Framer · Export · Deploy · Live">${stepDots(p)}<span class="mono">${esc(text)}</span></button>`;
+    } else if (l) {
+      mid = linkLabel(l);
+    }
+    // Both ends already sit on other rows: the label floats on its wire instead.
+    if (!s && !g) {
+      if (mid) floats += mid.replace('class="mlabel', `data-wire="${wireId(p ? "mw-" + p.full : "ml-" + l.id)}" class="mlabel float`);
+      return "";
+    }
+    return `<div class="mcell fr">${s ? sourceNode(s) : ""}</div>` +
+      `<div class="mmid">${mid}</div>` +
       `<div class="mcell gh">${g ? githubNode(g) : ""}</div>`;
-  }).join("");
+  }).join("") + floats;
   const grid = $("#map-grid");
   if (html !== mapHtml) {
-    const focused = document.activeElement?.closest?.("#add-site") ? $("#add-site input").value : null;
+    const input = document.activeElement?.closest?.("#add-site") ? $("#add-site input[name=site]") : null;
+    const typed = input?.value;
     grid.innerHTML = html;
     mapHtml = html;
-    if (focused !== null) { $("#add-site input").value = focused; $("#add-site input").focus(); }
+    if (input) { const again = $("#add-site input[name=site]"); again.value = typed; again.focus(); }
     requestAnimationFrame(drawMapWires);
     setTimeout(() => $("#map").classList.add("entered"), 900);
     for (const u of looseSites) if (!siteReach.has(u)) checkSite(u);
   }
+  const options = allRepos.map((r) => `<option value="${esc(r.full_name)}">`).join("");
+  const list = $("#repo-options");
+  if (list.dataset.html !== options) { list.innerHTML = options; list.dataset.html = options; }
   renderMapSide();
-  const all = [...projects.values()];
-  const failing = all.filter((p) => connState(p)[0] === "err").length;
-  const syncing = all.filter((p) => connState(p)[0] === "busy" && p.loaded).length;
-  $("#map-summary").textContent = !all.length ? "none yet"
-    : `${all.length} · ${failing ? `${failing} failing` : syncing ? `${syncing} syncing` : "all healthy"}`;
-  $("#map-summary-dot").className = "dot " + (!all.length ? "" : failing ? "err" : syncing ? "busy" : "ok");
+  const states = [...[...projects.values()].map((p) => (p.loaded ? connState(p)[0] : "")), ...allLinks().map((l) => (l.d.loaded ? linkState(l.d)[0] : ""))];
+  const failing = states.filter((s) => s === "err").length;
+  const syncing = states.filter((s) => s === "busy").length;
+  $("#map-summary").textContent = !states.length ? "none yet"
+    : `${states.length} · ${failing ? `${failing} failing` : syncing ? `${syncing} syncing` : "all healthy"}`;
+  $("#map-summary-dot").className = "dot " + (!states.length ? "" : failing ? "err" : syncing ? "busy" : "ok");
   tick();
 }
 
@@ -1339,12 +1520,24 @@ function drawMapWires() {
     const o = offsetIn(port || node, map);
     return port ? [o.x + o.w / 2, o.y + o.h / 2] : [side === "right" ? o.x + o.w : o.x, o.y + o.h / 2];
   };
+  const conns = [
+    ...[...projects.values()].map((p) => ({ id: "mw-" + p.full, s: p.config.framerUrl, g: p.full, st: connState(p)[0] })),
+    ...allLinks().map((l) => ({ id: "ml-" + l.id, s: REPO_KEY + l.repo, g: l.dest, st: linkState(l.d)[0] })),
+  ];
   const links = [];
-  for (const p of projects.values()) {
-    const f = $(`.mnode.fr[data-framer="${CSS.escape(p.config.framerUrl)}"]`, map);
-    const g = $(`.mnode.gh[data-repo="${CSS.escape(p.full)}"]`, map);
+  for (const c of conns) {
+    const f = $(`.mnode.fr[data-source="${CSS.escape(c.s)}"]`, map);
+    const g = $(`.mnode.gh[data-repo="${CSS.escape(c.g)}"]`, map);
     if (!f || !g) continue;
-    links.push({ id: "mw-" + p.full.replace(/[^\w-]/g, "_"), d: hCurve(pt(f, "right"), pt(g, "left")), st: connState(p)[0] });
+    const [a, b] = [pt(f, "right"), pt(g, "left")];
+    links.push({ id: wireId(c.id), d: hCurve(a, b), st: c.st, mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] });
+  }
+  // A floating label sits on the middle of its wire (a level curve's midpoint is halfway between its ends).
+  const grid = offsetIn($("#map-grid"), map);
+  for (const el of $$(".mlabel.float", map)) {
+    const l = links.find((x) => x.id === el.dataset.wire);
+    el.hidden = !l;
+    if (l) { el.style.left = `${l.mid[0] - grid.x}px`; el.style.top = `${l.mid[1] - grid.y}px`; }
   }
   // Rebuilding restarts the moving dots, so only rebuild when something changed.
   const sig = `${map.offsetWidth}x${map.offsetHeight}` + JSON.stringify(links);
@@ -1387,30 +1580,50 @@ if ("ResizeObserver" in window) {
 }
 document.fonts?.ready.then(() => requestAnimationFrame(drawMapWires));
 
+/** Activity for the links into a repo: pulls running or failing, and folders updated. */
+function linkActivity(d) {
+  const name = d.full.split("/")[1];
+  const items = [];
+  const run = d.runs?.[0];
+  const when = run && (run.run_started_at || run.created_at);
+  if (run && run.status !== "completed") items.push({ when, dot: "busy", title: "Pulling linked repos", meta: `${name} · ${dayFmt(when)}`, href: run.html_url });
+  else if (run?.conclusion === "failure") items.push({ when, dot: "err", title: "Pull failed", meta: `${name} · ${dayFmt(when)}`, href: run.html_url });
+  d.links.pull.forEach((l, i) => {
+    const c = d.updates?.[i];
+    const at = c?.commit?.committer?.date;
+    if (at) items.push({ when: at, dot: "ok", title: `${l.into}/ updated from ${l.repo.split("/")[1]}`, meta: `${name} · ${dayFmt(at)}`, href: c.html_url });
+  });
+  return items;
+}
+
 function renderMapSide() {
   const all = [...projects.values()];
+  const links = allLinks();
   const loaded = all.filter((p) => p.loaded);
-  const inSync = loaded.filter((p) => connState(p)[0] === "ok").length;
-  const sites = new Set([...all.map((p) => p.config.framerUrl), ...looseSites]).size;
+  const states = [...all.map((p) => connState(p)[0]), ...links.map((l) => linkState(l.d)[0])];
+  const sources = new Set([...all.map((p) => p.config.framerUrl), ...looseSites, ...links.map((l) => REPO_KEY + l.repo), ...looseRepos.map((r) => REPO_KEY + r)]).size;
   const rows = [
-    ["Framer sites", sites],
+    ["Sources", sources],
     ["Repositories", allRepos.length || all.length],
-    ["Connections", all.length],
-    ["In sync", `${inSync} / ${all.length}`],
-    ["Failing", all.filter((p) => connState(p)[0] === "err").length],
+    ["Connections", states.length],
+    ["In sync", `${states.filter((s) => s === "ok").length} / ${states.length}`],
+    ["Failing", states.filter((s) => s === "err").length],
     ["Schedule", "*/15 * * * *"],
   ];
   const dl = $("#info");
   const infoHtml = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
   if (dl.dataset.html !== infoHtml) { dl.innerHTML = infoHtml; dl.dataset.html = infoHtml; }
 
-  const items = loaded.flatMap((p) => activityItems(p, model(p)).map((i) => ({ ...i, meta: `${p.full.split("/")[1]} · ${i.meta}` })))
+  const items = [
+    ...loaded.flatMap((p) => activityItems(p, model(p)).map((i) => ({ ...i, meta: `${p.full.split("/")[1]} · ${i.meta}` }))),
+    ...[...linkRepos.values()].filter((d) => d.loaded).flatMap(linkActivity),
+  ]
     .sort((a, b) => (a.dot === "busy" ? -1 : b.dot === "busy" ? 1 : new Date(b.when) - new Date(a.when)))
     .slice(0, 8);
   const pending = `<li class="pending"><i class="dot"></i><span class="a-title">Next check in <span data-countdown>${clockFmt((nextCheck() - Date.now()) / 1000)}</span></span></li>`;
   const html = pending + (items.length
     ? items.map((i) => `<li><i class="dot ${i.dot}"></i>${i.href ? `<a class="a-title" href="${esc(i.href)}" target="_blank" rel="noopener">${esc(i.title)}</a>` : `<span class="a-title">${esc(i.title)}</span>`}<span class="a-meta">${esc(i.meta)}</span></li>`).join("")
-    : `<li><i class="dot"></i><span class="a-title">Nothing yet</span><span class="a-meta">Connect a Framer site to a repository.</span></li>`);
+    : `<li><i class="dot"></i><span class="a-title">Nothing yet</span><span class="a-meta">Connect a source to a repository.</span></li>`);
   const ol = $("#activity");
   if (ol.dataset.html !== html) { ol.innerHTML = html; ol.dataset.html = html; }
 }
@@ -1432,39 +1645,80 @@ function addSite(url) {
   checkSite(url);
 }
 
+/** "owner/name", a github.com link, or just a name in your own account. */
+function parseRepo(v) {
+  v = v.trim().replace(/^(https?:\/\/)?(www\.)?github\.com\//i, "").replace(/\.git$/, "").replace(/\/+$/, "");
+  if (/^[\w.-]+$/.test(v) && me) v = `${me.login}/${v}`;
+  const m = v.match(/^([\w.-]+)\/([\w.-]+)/);
+  if (!m) throw new Error("Enter a repository as owner/name.");
+  return `${m[1]}/${m[2]}`;
+}
+
+async function addRepoSource(v) {
+  let full = parseRepo(v);
+  try {
+    full = (await gh(`/repos/${full}`)).full_name;
+  } catch (err) {
+    return toast(err.status === 404 ? `Couldn't find ${full}` : friendly(err));
+  }
+  if (!looseRepos.includes(full) && !allLinks().some((l) => l.repo === full)) {
+    looseRepos.push(full);
+    saveSites();
+  }
+  mapHtml = null;
+  renderMap();
+  const input = $("#add-site input[name=site]");
+  if (input) input.value = "";
+  toast("Now drag its dot to a repository");
+}
+
 function suggestName(url) {
   return host(url).replace(/^www\./, "").replace(/\.framer\.(website|app|ai)$/, "").replace(/\.[a-z]+$/, "").replace(/[^A-Za-z0-9._-]+/g, "-");
 }
 
-function finishWire(url, repo) {
+/** Can a wire from this source end at this repository? */
+function canTarget(key, repo) {
+  if (repo === "__new") return true;
+  if (isRepoKey(key)) return repo !== key.slice(REPO_KEY.length);
+  return !projects.has(repo);
+}
+
+function finishWire(key, repo) {
   cancelWire();
-  if (!url || !repo) return;
-  if (repo === "__new") return openConnect(url, { name: suggestName(url) });
+  if (!key || !repo) return;
+  if (isRepoKey(key)) {
+    const src = key.slice(REPO_KEY.length);
+    if (repo === src) return toast("A repository can't pull from itself");
+    return openLink(src, repo);
+  }
+  if (repo === "__new") return openConnect(key, { name: suggestName(key) });
   if (projects.has(repo)) return toast(`${repo.split("/")[1]} is already connected`);
-  openConnect(url, { repo });
+  openConnect(key, { repo });
 }
 
 function cancelWire() {
   arming = null;
   $("#map")?.classList.remove("arming");
   $$(".mnode.armed").forEach((n) => n.classList.remove("armed"));
+  $$(".mnode.target").forEach((n) => n.classList.remove("target"));
   $("#drag-wire")?.setAttribute("d", "");
 }
 
-// Drag from a Framer site's port to a repository, or tap the port and then tap a repository.
+// Drag from a source's port to a repository, or tap the port and then tap a repository.
 document.addEventListener("pointerdown", (e) => {
-  const port = e.target.closest("[data-port-framer]");
+  const port = e.target.closest("[data-port-source]");
   if (!port) return;
   e.preventDefault();
-  const url = port.dataset.portFramer;
+  const key = port.dataset.portSource;
   const map = $("#map");
   const box = map.getBoundingClientRect();
   const r = port.getBoundingClientRect();
   const from = [r.left + r.width / 2 - box.left, r.top + r.height / 2 - box.top];
   const start = [e.clientX, e.clientY];
-  arming = { url };
+  arming = { key };
   map.classList.add("arming");
   port.closest(".mnode").classList.add("armed");
+  for (const n of $$(".mnode.gh", map)) n.classList.toggle("target", canTarget(key, n.dataset.repo));
   const move = (ev) => {
     const to = [ev.clientX - box.left, ev.clientY - box.top];
     $("#drag-wire")?.setAttribute("d", hCurve(from, to));
@@ -1474,7 +1728,7 @@ document.addEventListener("pointerdown", (e) => {
     removeEventListener("pointerup", up);
     const moved = Math.hypot(ev.clientX - start[0], ev.clientY - start[1]) > 6;
     const target = document.elementFromPoint(ev.clientX, ev.clientY)?.closest(".mnode.gh");
-    if (target) return finishWire(url, target.dataset.repo);
+    if (target) return finishWire(key, target.dataset.repo);
     if (moved) cancelWire(); // dropped on nothing
     else $("#drag-wire")?.setAttribute("d", ""); // tap: wait for a repository tap
   };
@@ -1484,6 +1738,8 @@ document.addEventListener("pointerdown", (e) => {
 document.addEventListener("click", (e) => {
   const open = e.target.closest("[data-open]");
   if (open) return select(open.dataset.open);
+  const link = e.target.closest("[data-link]");
+  if (link) return openLinkManage(link.dataset.link);
   const rm = e.target.closest("[data-remove-site]");
   if (rm) {
     looseSites = looseSites.filter((u) => u !== rm.dataset.removeSite);
@@ -1491,29 +1747,372 @@ document.addEventListener("click", (e) => {
     mapHtml = null;
     return renderMap();
   }
+  const rmRepo = e.target.closest("[data-remove-repo]");
+  if (rmRepo) {
+    looseRepos = looseRepos.filter((r) => r !== rmRepo.dataset.removeRepo);
+    saveSites();
+    mapHtml = null;
+    return renderMap();
+  }
   if (arming) {
     const target = e.target.closest(".mnode.gh");
-    if (target) return finishWire(arming.url, target.dataset.repo);
-    if (!e.target.closest("[data-port-framer]")) cancelWire();
+    if (target) return finishWire(arming.key, target.dataset.repo);
+    if (!e.target.closest("[data-port-source]")) cancelWire();
     return;
   }
   const node = e.target.closest(".mnode.linked .node-head");
   if (node) {
     const n = node.closest(".mnode");
-    const full = n.dataset.repo || [...projects.values()].find((p) => p.config.framerUrl === n.dataset.framer)?.full;
-    if (full) select(full);
+    const key = n.dataset.source;
+    if (key && isRepoKey(key)) {
+      const l = allLinks().find((x) => x.repo === key.slice(REPO_KEY.length));
+      return l && openLinkManage(l.id);
+    }
+    const full = n.dataset.repo || [...projects.values()].find((p) => p.config.framerUrl === key)?.full;
+    if (projects.has(full)) return select(full);
+    const l = allLinks().find((x) => x.dest === full);
+    if (l) openLinkManage(l.id);
   }
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") cancelWire(); });
+document.addEventListener("change", (e) => {
+  if (!e.target.matches("#add-site input[name=kind]")) return;
+  addKind = e.target.value;
+  const typed = $("#add-site input[name=site]").value;
+  mapHtml = null;
+  renderMap();
+  const input = $("#add-site input[name=site]");
+  input.value = typed;
+  input.focus();
+});
 document.addEventListener("submit", (e) => {
   if (e.target.id !== "add-site") return;
   e.preventDefault();
+  const v = e.target.site.value;
+  if (!v.trim()) return;
+  if (addKind === "repo") return addRepoSource(v);
   try {
-    addSite(normalizeFramerUrl(e.target.site.value));
+    addSite(normalizeFramerUrl(v));
   } catch (err) {
     toast(err.message);
   }
 });
+
+// ------------------------------------------------------------------ repo links
+
+// Folders a link can't copy into: the repo's own setup.
+const KEPT_DIRS = [".git", ".github", "tools", LINKS_PATH, ".site.json"];
+// Rewritten on every site sync, so a link into them would be overwritten.
+const SITE_DIRS = ["site", "app", "project"];
+
+/** A folder inside a repo: no leading or trailing slash, no "." or "..". */
+function cleanDir(v) {
+  const d = String(v ?? "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (d.split("/").some((part) => part === ".." || part === ".")) throw new Error(`"${v}" can't contain . or ..`);
+  return d;
+}
+
+let linkDraft = null; // { src, dest } while the link dialog is creating a link
+let managing = null; // the link the dialog is showing
+let intoTouched = false;
+
+function linkDialogMode(mode) {
+  $("#link-fields").hidden = mode !== "create";
+  $("#link-manage").hidden = mode !== "manage";
+  $("#link-progress").hidden = mode !== "progress";
+  $("#link-done").hidden = true;
+  $("#link-error").hidden = true;
+  if (mode === "progress") $("#link-progress").innerHTML = "";
+}
+
+async function openLink(src, dest) {
+  const isNew = dest === "__new";
+  linkDraft = { src, dest };
+  managing = null;
+  intoTouched = false;
+  $("#link-form").reset();
+  $("#link-title").textContent = "Link repositories";
+  linkDialogMode("create");
+  $("#link-from").value = src;
+  $("#link-to").value = isNew ? "" : dest;
+  $("#link-to").readOnly = !isNew;
+  $("#link-to").placeholder = isNew ? "new-repository" : "";
+  $("#link-to-label").textContent = isNew ? "New repository name" : "To";
+  $("#link-new").hidden = !isNew;
+  $("#link-into").value = src.split("/")[1];
+  $("#link-dialog").showModal();
+  const sel = $("#link-branch");
+  sel.innerHTML = "<option value=''>Loading…</option>";
+  try {
+    const [repo, branches] = await Promise.all([gh(`/repos/${src}`), gh(`/repos/${src}/branches?per_page=100`)]);
+    sel.innerHTML = "";
+    for (const b of branches) sel.add(new Option(b.name, b.name));
+    sel.value = repo.default_branch;
+  } catch (err) {
+    sel.innerHTML = "";
+    sel.add(new Option("Couldn't load branches", ""));
+  }
+}
+
+$("#link-path").addEventListener("input", () => {
+  if (intoTouched || !linkDraft) return;
+  const last = $("#link-path").value.trim().replace(/\/+$/, "").split("/").pop();
+  $("#link-into").value = last || linkDraft.src.split("/")[1];
+});
+$("#link-into").addEventListener("input", () => { intoTouched = true; });
+
+function progressIn(list) {
+  return (text) => {
+    const li = document.createElement("li");
+    li.innerHTML = `<i class="dot busy"></i><span class="a-title"></span><span class="a-meta"></span>`;
+    $(".a-title", li).textContent = text;
+    $(list).append(li);
+    return {
+      done(note = "") { $(".dot", li).className = "dot ok"; $(".a-meta", li).textContent = note; },
+      fail(note) { $(".dot", li).className = "dot err"; $(".a-meta", li).textContent = note; },
+    };
+  };
+}
+
+async function createLink(e) {
+  e.preventDefault();
+  const err = $("#link-error");
+  err.hidden = true;
+  const { src } = linkDraft;
+  const isNew = linkDraft.dest === "__new";
+  let dest, branch, from, into;
+  try {
+    branch = $("#link-branch").value;
+    if (!branch) throw new Error("Pick a branch to copy from.");
+    from = cleanDir($("#link-path").value);
+    into = cleanDir($("#link-into").value);
+    if (!into) throw new Error("Choose a folder to copy into.");
+    if (KEPT_DIRS.includes(into.split("/")[0])) throw new Error(`${into.split("/")[0]} is kept for the repository's own setup. Pick another folder.`);
+    if (isNew) {
+      const name = $("#link-to").value.trim();
+      if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error("Give the new repository a name (letters, numbers, dashes).");
+      dest = `${me.login}/${name}`;
+    } else {
+      dest = linkDraft.dest;
+    }
+    if (dest === src) throw new Error("A repository can't pull from itself.");
+    if (projects.has(dest) && SITE_DIRS.includes(into.split("/")[0])) throw new Error(`${into.split("/")[0]}/ is rewritten on every site sync. Pick another folder.`);
+    const taken = linkRepos.get(dest)?.links.pull.find((l) => l.into === into);
+    if (taken) throw new Error(`${taken.repo} already copies into ${into}/. Pick another folder.`);
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.hidden = false;
+    return;
+  }
+
+  linkDialogMode("progress");
+  const progressStep = progressIn("#link-progress");
+  let step;
+  try {
+    step = progressStep("Loading the sync tools");
+    const t = await loadLinkTemplates();
+    step.done();
+
+    let destRepo;
+    if (isNew) {
+      step = progressStep(`Creating ${dest}`);
+      destRepo = await gh("/user/repos", { method: "POST", body: { name: dest.split("/")[1], private: $("#link-private").checked, auto_init: true } });
+      step.done();
+    } else {
+      step = progressStep(`Checking ${dest}`);
+      destRepo = await gh(`/repos/${dest}`);
+      if (!destRepo.permissions?.push) throw new Error("You don't have write access to that repository.");
+      step.done();
+    }
+    const srcRepo = await gh(`/repos/${src}`);
+    const canPush = !!srcRepo.permissions?.push;
+
+    // The token lets the destination read a private source and lets the
+    // source tell the destination about a push the moment it happens.
+    step = progressStep("Storing your GitHub access as a secret");
+    try {
+      await putSecret(dest, SYNC_SECRET, token);
+      if (canPush) await putSecret(src, SYNC_SECRET, token);
+      step.done();
+    } catch (ex) {
+      if (srcRepo.private) throw ex;
+      step.done("Skipped. It will check for changes every 15 minutes.");
+    }
+
+    step = progressStep(`Setting up ${dest.split("/")[1]} to pull`);
+    const links = (await readLinks(dest, destRepo.default_branch)) || { pull: [], push: [] };
+    links.pull = links.pull.filter((l) => l.into !== into).concat({ repo: src, branch, path: from, into });
+    await commitFiles(dest, {
+      [`.github/workflows/${PULL_WORKFLOW}`]: t.pull,
+      [LINKS_TOOL_PATH]: t.tool,
+      [LINKS_PATH]: linksFile(links),
+    }, `Copy ${from ? from + "/" : "everything"} from ${src} into ${into}/`, destRepo.default_branch);
+    step.done("The first copy has started");
+
+    let srcLinks = null;
+    if (canPush) {
+      step = progressStep(`Setting up ${src.split("/")[1]} to announce changes`);
+      srcLinks = (await readLinks(src, branch)) || { pull: [], push: [] };
+      if (!srcLinks.push.some((x) => x.repo === dest && x.branch === branch)) srcLinks.push.push({ repo: dest, branch });
+      await commitFiles(src, {
+        [`.github/workflows/${NOTIFY_WORKFLOW}`]: t.notify,
+        [LINKS_TOOL_PATH]: t.tool,
+        [LINKS_PATH]: linksFile(srcLinks),
+      }, `Tell ${dest} when this changes`, branch);
+      step.done();
+    } else {
+      progressStep(`${src} isn't yours to change, so ${dest.split("/")[1]} checks it every 15 minutes`).done();
+    }
+
+    looseRepos = looseRepos.filter((r) => r !== src);
+    saveSites();
+    if (isNew) allRepos.unshift(destRepo);
+    setLinks(dest, links);
+    if (srcLinks && srcRepo.default_branch === branch) setLinks(src, srcLinks);
+    saveCache();
+    progressStep(`Linked. Pushes to ${branch} now copy over to ${dest.split("/")[1]}/${into}.`).done();
+  } catch (ex) {
+    step?.fail(friendly(ex));
+  }
+  $("#link-done").hidden = false;
+}
+
+async function loadLinkTemplates() {
+  const [pull, notify, tool] = await Promise.all(
+    ["template/pull.yml", "template/notify.yml", "template/links.mjs"].map((f) =>
+      fetch(f, { cache: "no-cache" }).then((r) => {
+        if (!r.ok) throw new Error(`Couldn't load ${f}`);
+        return r.text();
+      })
+    )
+  );
+  return { pull, notify, tool };
+}
+
+function openLinkManage(id) {
+  const l = allLinks().find((x) => x.id === id);
+  if (!l) return;
+  managing = l;
+  linkDraft = null;
+  $("#link-title").textContent = `${l.repo.split("/")[1]} → ${l.dest.split("/")[1]}`;
+  linkDialogMode("manage");
+  const unlink = $("#link-unlink");
+  unlink.textContent = "Unlink";
+  delete unlink.dataset.armed;
+  renderLinkInfo();
+  $("#link-dialog").showModal();
+  refreshLinks(l.dest);
+}
+
+function renderLinkInfo() {
+  if (!managing || $("#link-manage").hidden) return;
+  const d = linkRepos.get(managing.dest);
+  const l = d?.links.pull.find((x) => x.repo === managing.repo && x.into === managing.into);
+  if (!l) return;
+  const i = d.links.pull.indexOf(l);
+  const [st, text] = linkState(d);
+  const run = d.runs?.[0];
+  const c = d.updates?.[i];
+  const tree = (repo, ref, dir) => `https://github.com/${repo}/tree/${encodeURIComponent(ref || "HEAD")}/${dir}`;
+  const a = (href, t) => `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(t)}</a>`;
+  const rows = [
+    ["From", a(tree(l.repo, l.branch, l.path || ""), `${l.repo}${l.path ? "/" + l.path : ""}`)],
+    ["Branch", esc(l.branch || "default")],
+    ["Into", a(tree(l.dest || managing.dest, "HEAD", l.into), `${managing.dest}/${l.into}`)],
+    ["Status", `<span class="node-state"><i class="dot ${st}"></i>${esc(text)}</span>`],
+    ["Updated", c ? a(c.html_url, dayFmt(c.commit.committer.date)) : "not yet"],
+    ["Last run", run ? a(run.html_url, dayFmt(run.run_started_at || run.created_at)) : "–"],
+    ["Runs", "on push · every 15 min"],
+  ];
+  const html = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  const dl = $("#link-info");
+  if (dl.dataset.html !== html) { dl.innerHTML = html; dl.dataset.html = html; }
+}
+
+async function dispatchPull(full) {
+  const repo = await gh(`/repos/${full}`);
+  await gh(`/repos/${full}/actions/workflows/${PULL_WORKFLOW}/dispatches`, { method: "POST", body: { ref: repo.default_branch } });
+}
+
+$("#link-sync").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  const l = managing;
+  if (!l) return;
+  button.disabled = true;
+  try {
+    const before = linkRepos.get(l.dest)?.runs?.[0]?.id;
+    await dispatchPull(l.dest);
+    toast("Pulling now");
+    for (let i = 0; i < 8; i++) {
+      await sleep(2000);
+      await refreshLinks(l.dest);
+      if (linkRepos.get(l.dest)?.runs?.[0]?.id !== before) break;
+    }
+  } catch (err) {
+    toast(`Couldn't start a pull: ${friendly(err)}`);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("#link-unlink").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  const l = managing;
+  if (!l) return;
+  if (!button.dataset.armed) {
+    button.dataset.armed = "1";
+    button.textContent = `Stop copying? The folder stays in ${l.dest.split("/")[1]}`;
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Unlinking…";
+  try {
+    await unlink(l);
+    $("#link-dialog").close();
+    toast(`Unlinked. ${l.into}/ stays in ${l.dest.split("/")[1]}`);
+  } catch (err) {
+    toast(`Couldn't unlink: ${friendly(err)}`);
+    button.textContent = "Unlink";
+    delete button.dataset.armed;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+async function unlink(l) {
+  const destRepo = await gh(`/repos/${l.dest}`);
+  const links = (await readLinks(l.dest, destRepo.default_branch)) || { pull: [], push: [] };
+  links.pull = links.pull.filter((x) => !(x.repo === l.repo && x.into === l.into));
+  const empty = !links.pull.length && !links.push.length;
+  const files = { [LINKS_PATH]: empty ? null : linksFile(links) };
+  if (!links.pull.length) files[`.github/workflows/${PULL_WORKFLOW}`] = null;
+  if (empty) files[LINKS_TOOL_PATH] = null;
+  await commitFiles(l.dest, files, `Stop copying from ${l.repo}`, destRepo.default_branch);
+  if (empty) await gh(`/repos/${l.dest}/actions/secrets/${SYNC_SECRET}`, { method: "DELETE" }).catch(() => {});
+  setLinks(l.dest, links);
+
+  // The source no longer needs to announce changes to this repo, unless
+  // another of its folders is still copied here.
+  if (links.pull.some((x) => x.repo === l.repo)) return saveCache();
+  try {
+    const branch = l.branch || (await gh(`/repos/${l.repo}`)).default_branch;
+    const src = await readLinks(l.repo, branch);
+    if (!src?.push.some((x) => x.repo === l.dest)) return saveCache();
+    src.push = src.push.filter((x) => x.repo !== l.dest);
+    const none = !src.pull.length && !src.push.length;
+    const sfiles = { [LINKS_PATH]: none ? null : linksFile(src) };
+    if (!src.push.length) sfiles[`.github/workflows/${NOTIFY_WORKFLOW}`] = null;
+    if (none) sfiles[LINKS_TOOL_PATH] = null;
+    await commitFiles(l.repo, sfiles, `Stop telling ${l.dest} about changes`, branch);
+    if (none) await gh(`/repos/${l.repo}/actions/secrets/${SYNC_SECRET}`, { method: "DELETE" }).catch(() => {});
+    if (linkRepos.has(l.repo)) setLinks(l.repo, src);
+  } catch (err) {
+    console.warn(`Left ${l.repo} as it was`, err); // not ours to change, or already tidied
+  }
+  saveCache();
+}
+
+$("#link-form").addEventListener("submit", createLink);
 
 // ------------------------------------------------------------------ appearance
 
@@ -1545,6 +2144,7 @@ async function signIn(t, user) {
   $("#view-app").hidden = false;
   try {
     for (const c of JSON.parse(store.get(CACHE_KEY) || "[]")) projects.set(c.full, c);
+    for (const c of JSON.parse(store.get(LINKS_CACHE_KEY) || "[]")) linkRepos.set(c.full, c);
   } catch {}
   scanned = projects.size > 0;
   render();
@@ -1563,6 +2163,7 @@ async function signOut() {
   await account.signOut();
   store.del(TOKEN_KEY);
   store.del(CACHE_KEY);
+  store.del(LINKS_CACHE_KEY);
   store.del(SELECTED_KEY);
   location.reload();
 }
@@ -1668,6 +2269,9 @@ document.addEventListener("click", (e) => {
   if (action === "map") return select(null);
   if (action === "check") {
     const fulls = selected ? [selected] : [...projects.keys()];
+    const pulls = selected ? [] : [...linkRepos.values()].filter((d) => d.links.pull.length).map((d) => d.full);
+    for (const full of pulls) dispatchPull(full).then(() => sleep(3000)).then(() => refreshLinks(full)).catch(() => {});
+    if (!fulls.length && pulls.length) return toast(`Pulling into ${pulls.length} linked repo${pulls.length > 1 ? "s" : ""}`);
     return fulls.length ? syncNow(fulls, btn, false) : toast("Nothing connected yet");
   }
 

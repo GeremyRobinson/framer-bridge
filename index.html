@@ -105,11 +105,12 @@
           <div id="stage-map" class="panel map-panel" hidden>
             <div class="canvas-head">
               <span class="map-title">Connections <i class="dot" id="map-summary-dot"></i><span id="map-summary" class="mono muted"></span></span>
-              <span class="map-actions"><span class="muted map-hint">Drag from a Framer site's dot to a repository to connect them</span><button type="button" class="link" data-action="check" title="Look for a new Framer publish on every connection"><span>Check now</span></button></span>
+              <span class="map-actions"><span class="muted map-hint">Drag from a source's dot to a repository to connect them</span><button type="button" class="link" data-action="check" title="Look for changes on every connection"><span>Check now</span></button></span>
             </div>
             <div class="map" id="map">
               <svg class="wires" id="map-wires"></svg>
               <div class="map-grid" id="map-grid"></div>
+              <datalist id="repo-options"></datalist>
             </div>
           </div>
 
@@ -212,6 +213,48 @@
       <div class="dialog-foot">
         <button type="button" class="link" data-close>Cancel</button>
         <button type="submit" class="pill pill-btn">Save<i class="tri right"></i></button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Link dialog: one repository's folder copied into another -->
+  <dialog id="link-dialog">
+    <form id="link-form" method="dialog" class="sheet">
+      <div class="dialog-head">
+        <h2 class="label" id="link-title">Link repositories</h2>
+        <button type="button" class="link" data-close>Close</button>
+      </div>
+      <div id="link-fields">
+        <label for="link-from">From</label>
+        <input id="link-from" class="pill mono" readonly>
+        <label for="link-branch">Branch</label>
+        <span class="pill select"><select id="link-branch" class="mono"></select><i class="tri down"></i></span>
+        <label for="link-path">Folder to copy</label>
+        <input id="link-path" class="pill mono" placeholder="Whole repository" autocomplete="off">
+        <label for="link-to" id="link-to-label">To</label>
+        <input id="link-to" class="pill mono" pattern="[A-Za-z0-9._\-]+" autocomplete="off">
+        <div id="link-new" hidden>
+          <label class="check"><input type="checkbox" id="link-private" checked> Private</label>
+        </div>
+        <label for="link-into">Into folder</label>
+        <input id="link-into" class="pill mono" placeholder="content" autocomplete="off">
+        <p class="muted">Every push to the branch copies the folder over, replacing what's in the destination folder. Bridge stores your GitHub access as an encrypted secret in both repositories so they can reach each other.</p>
+        <p id="link-error" class="error" hidden></p>
+        <div class="dialog-foot">
+          <button type="button" class="link" data-close>Cancel</button>
+          <button type="submit" class="pill pill-btn">Link<i class="tri right"></i></button>
+        </div>
+      </div>
+      <div id="link-manage" hidden>
+        <dl id="link-info" class="info"></dl>
+        <div class="dialog-foot">
+          <button type="button" class="link" id="link-unlink">Unlink</button>
+          <button type="button" class="pill pill-btn" id="link-sync">Sync now<i class="tri right"></i></button>
+        </div>
+      </div>
+      <ol id="link-progress" class="activity" hidden></ol>
+      <div id="link-done" class="dialog-foot" hidden>
+        <button type="button" class="pill pill-btn" data-close>Done<i class="tri right"></i></button>
       </div>
     </form>
   </dialog>

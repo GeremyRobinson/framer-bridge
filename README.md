@@ -38,6 +38,31 @@ site to a GitHub repository and keeps a GitHub Pages copy of it in sync.
    workflow checks whether the Framer site changed, and if it did, exports it
    and deploys it to Pages. **Sync now** does it immediately.
 
+## Linking repositories
+
+A GitHub repository can be a source too: a CMS content repo, a ledger's data,
+anything kept in Git. Add it on the map ("Add a source" → GitHub repo), then
+drag its dot to another repository and pick a branch, a folder to copy (or the
+whole repository) and the folder to copy it into. From then on every push to
+that branch copies the folder over, replacing what's in the destination folder.
+
+Bridge commits these, and nothing else:
+
+- In the destination: `.github/workflows/pull.yml`, `tools/links.mjs` and
+  `.links.json` (the `pull` list). The workflow copies each linked folder and
+  commits it when it changed, when told to and every 15 minutes as a fallback.
+- In the source, if you can write to it: `.github/workflows/notify.yml`,
+  `tools/links.mjs` and `.links.json` (the `push` list). On every push it tells
+  the destinations to pull right away.
+- A `SYNC_TOKEN` secret in both, holding your GitHub access, so a destination
+  can read a private source and a source can start the destination's workflow.
+  Public sources work without it, on the 15-minute timer.
+
+A destination can pull from several sources and a source can feed several
+destinations; when a pull changes a repo that is itself a source, it passes the
+news on. Unlinking removes those files (the copied folder stays), and removes
+the secret once a repo has no links left.
+
 Each project card shows four status lights:
 
 | Light | Meaning |

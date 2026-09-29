@@ -1,0 +1,25 @@
+name: Notify linked repos
+
+# Tells the repositories listed under "push" in .links.json that this one
+# changed, so they pull the new version right away.
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .links.json
+            tools/links.mjs
+          sparse-checkout-cone-mode: false
+      - name: Tell linked repos to pull
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: node tools/links.mjs notify

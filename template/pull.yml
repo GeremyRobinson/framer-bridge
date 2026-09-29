@@ -1,0 +1,33 @@
+name: Pull linked repos
+
+# Copies the folders listed under "pull" in .links.json from other
+# repositories into this one, and commits them when they change. A linked
+# repository starts this the moment it gets a push; the timer catches anything
+# missed, and "Run workflow" on the Actions tab runs it by hand.
+on:
+  repository_dispatch:
+    types: [source-updated]
+  schedule:
+    - cron: "11-59/15 * * * *"
+  workflow_dispatch:
+  push:
+    paths: [.links.json]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pull-links
+  cancel-in-progress: false
+
+jobs:
+  pull:
+    name: Pull
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Copy the linked folders
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/links.mjs pull
