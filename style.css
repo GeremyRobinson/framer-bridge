@@ -21,6 +21,7 @@
 
 :root {
   --size: 13px;
+  --pad: 10px;              /* every card and box padding, and the gap between boxes */
   --line: 1px;              /* every stroke: wires, ports, icons, rules */
   --text: #111;
   --muted: #8c8c8c;
@@ -156,7 +157,7 @@ input.pill::placeholder { color: var(--faint); }
 .node.cnode { position: relative; left: auto; top: auto; width: auto; animation: rise .5s both; display: flex; flex-direction: column; }
 .pair-wire { align-self: center; }
 .connect .pill { background: var(--card); }
-.cnode .box { display: grid; gap: 6px; padding: 8px; }
+.cnode .box { display: grid; gap: var(--pad); padding: var(--pad); }
 .cnode .box-title { padding: 0 6px; }
 .cnode .pill { background: var(--card); }
 .cnote { padding: 8px 10px 4px; }
@@ -222,7 +223,7 @@ input.pill::placeholder { color: var(--faint); }
 .spark { fill: var(--ok); }
 
 .node {
-  position: absolute; width: 260px; background: var(--card); border-radius: 18px; padding: 6px;
+  position: absolute; width: 260px; background: var(--card); border-radius: 18px; padding: var(--pad);
   transition: opacity .3s; animation: rise .5s cubic-bezier(.2, .8, .2, 1) both;
 }
 .node[data-node="source"] { left: 0; top: 40px; }
@@ -237,13 +238,13 @@ input.pill::placeholder { color: var(--faint); }
 @keyframes ping { 0% { box-shadow: 0 0 0 0 var(--ok); } 100% { box-shadow: 0 0 0 10px transparent; } }
 
 .node-tag { position: absolute; top: -34px; left: 0; background: var(--card); padding: 3px 12px; border-radius: 999px; }
-.node-head { display: flex; align-items: center; gap: 8px; padding: 5px 8px 7px; }
+.node-head { display: flex; align-items: center; gap: 8px; padding: 0 var(--pad) var(--pad); }
 .node-head svg { width: 14px; height: 14px; stroke: var(--text); stroke-width: var(--line); fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; vector-effect: non-scaling-stroke; }
 .node-head h3 { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .node-state { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
-.box { background: var(--well); border-radius: 12px; padding: 6px 12px; }
+.box { background: var(--well); border-radius: 12px; padding: var(--pad); }
 /* Same as the card's own padding, so the boxes are evenly spaced inside it. */
-.box + .box { margin-top: 6px; }
+.box + .box { margin-top: var(--pad); }
 .row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 2px 0; }
 .row > span:first-child { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .row > b { font-weight: 400; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -267,7 +268,7 @@ input.pill::placeholder { color: var(--faint); }
 .map { position: relative; padding: 10px 6px 6px; }
 .map .wires { z-index: 0; }
 /* Cards fit their content and are centred on each other, so each connection is level through their middles. */
-.map-grid { position: relative; display: grid; grid-template-columns: minmax(0, 290px) minmax(90px, 1fr) minmax(0, 290px); gap: 14px 0; align-items: center; justify-content: space-between; }
+.map-grid { position: relative; display: grid; grid-template-columns: minmax(0, 290px) minmax(90px, 1fr) minmax(0, 290px); gap: var(--pad) 0; align-items: center; justify-content: space-between; }
 .map-col-title { color: var(--muted); text-transform: uppercase; letter-spacing: .06em; padding: 0 8px 2px; }
 .mcell { min-width: 0; }
 /* Cards keep their column's width; long values end in an ellipsis. */
@@ -276,7 +277,7 @@ input.pill::placeholder { color: var(--faint); }
 .map:not(.entered) .mnode { animation: rise .5s cubic-bezier(.2, .8, .2, 1) both; }
 .map.entered .mnode { animation: none; }
 .mnode.gh.new .node-head h3, .mnode.add .node-head h3 { color: var(--muted); }
-.mnode.add .box { display: grid; gap: 6px; padding: 8px; }
+.mnode.add .box { display: grid; gap: var(--pad); padding: var(--pad); }
 .mnode.add .pill { background: var(--card); }
 .mnode.unlinked { opacity: .78; }
 .mport { position: absolute; top: 50%; width: 11px; height: 11px; margin-top: -5.5px; border-radius: 50%; border: var(--line) solid var(--text); background: var(--card); padding: 0; cursor: crosshair; z-index: 2; }
@@ -363,7 +364,7 @@ fieldset.seg input:checked + span { color: var(--text); box-shadow: inset 0 0 0 
   .mmid { min-height: 44px; position: relative; }
   .mmid:not(:empty)::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: var(--line); background: var(--text); }
   .mmid .mlabel { position: relative; }
-  .mcell.fr + .mmid:empty + .mcell.gh { margin-top: 14px; }
+  .mcell.fr + .mmid:empty + .mcell.gh { margin-top: var(--pad); }
   .map-grid > .mcell.gh { margin-bottom: 18px; }
   .mport.out { right: 50%; top: auto; bottom: -6px; margin: 0 -5.5px 0 0; }
   .mport.in { left: 50%; top: -6px; margin: 0 0 0 -5.5px; }
