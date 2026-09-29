@@ -4,7 +4,7 @@
 // client-side router. The result has no builder runtime in it; it is plain
 // React you can edit, build with Vite and host anywhere.
 //
-//   node tools/react.mjs --site site --out app [--base /repo/react/]
+//   node tools/react.mjs --site site --out app [--project project] [--base /repo/react/]
 //
 // --base is where the React build will be served (default: where the
 // exported site is served). Images and fonts keep pointing at the exported
@@ -12,8 +12,9 @@
 //
 // Pages are rebuilt from the published markup, which already holds every
 // breakpoint, so the React version looks the same at every screen size.
-// What the builder's runtime added on top (appear animations, code
-// components, CMS search) is not part of this first version. Node 22+.
+// With --project (default: project/, saved by tools/project.mjs), the site's
+// own code components are copied to src/code/ and rendered live where the
+// pages use them. Appear animations and CMS search aren't rebuilt. Node 22+.
 
 import { readFile, writeFile, mkdir, rm, cp, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -28,23 +29,29 @@ const { values: opts } = parseArgs({
     site: { type: "string", default: "site" },
     out: { type: "string", default: "app" },
     base: { type: "string" },
+    project: { type: "string" },
   },
 });
 const SITE = path.resolve(opts.site);
 const OUT = path.resolve(opts.out);
+// The saved design project (tools/project.mjs); its code/ folder holds the
+// site's own components, which are brought back to life where they're used.
+const PROJECT = path.resolve(opts.project || "project");
+const CODE = path.join(PROJECT, "code");
 
 // ------------------------------------------------------------ parser
 
-async function loadParser() {
+async function loadDeps() {
   const dir = path.join(os.tmpdir(), "site-react-deps");
-  const entry = path.join(dir, "node_modules", "parse5", "dist", "index.js");
-  if (!existsSync(entry)) {
+  const mod = (name, file) => path.join(dir, "node_modules", name, "dist", file);
+  const entries = [mod("parse5", "index.js"), mod("acorn", "acorn.mjs"), mod("acorn-walk", "walk.mjs")];
+  if (!entries.every(existsSync)) {
     await mkdir(dir, { recursive: true });
-    execFileSync("npm", ["install", "--prefix", dir, "--no-save", "--no-audit", "--no-fund", "--loglevel=error", "parse5@7"], { stdio: "inherit" });
+    execFileSync("npm", ["install", "--prefix", dir, "--no-save", "--no-audit", "--no-fund", "--loglevel=error", "parse5@7", "acorn@8", "acorn-walk@8"], { stdio: "inherit" });
   }
-  return import(pathToFileURL(entry).href);
+  return Promise.all(entries.map((e) => import(pathToFileURL(e).href)));
 }
-const { parse } = await loadParser();
+const [{ parse }, acorn, walk] = await loadDeps();
 
 // ------------------------------------------------------------ naming
 
@@ -141,6 +148,8 @@ function jsx(node, depth) {
     return `${pad}<style>{${JSON.stringify(css)}}</style>`;
   }
   const open = `<${tag}${attrs(node)}`;
+  const island = islandFor(node);
+  if (island) return `${pad}${open}>\n${pad}  ${island}\n${pad}</${tag}>`;
   const kids = (node.content || node).childNodes || [];
   if (VOID.has(tag) || !kids.length) return `${pad}${open} />`;
   const inner = kids.map((c) => jsx(c, depth + 1)).filter(Boolean);
@@ -157,6 +166,237 @@ const find = (node, test) => {
   }
   return null;
 };
+
+// ------------------------------------------------------------ live components
+//
+// The published pages were rendered once on a server, so the site's own code
+// components (a clock, a cart button, charts) are frozen in the markup. Here
+// each one is found in the published scripts: which of the project's code
+// files it is, where it sits on the page, and the settings it was given
+// (including values bound to a CMS item). The page then renders the real
+// component from src/code/ in its place.
+
+async function filesUnder(dir, test, out = []) {
+  if (!existsSync(dir)) return out;
+  for (const f of await readdir(dir)) {
+    const p = path.join(dir, f);
+    if ((await stat(p)).isDirectory()) await filesUnder(p, test, out);
+    else if (test(f)) out.push(p);
+  }
+  return out;
+}
+
+/** Prop names a component function reads from its props, from its source. */
+function propKeys(list) {
+  const keys = [];
+  let depth = 0, cur = "";
+  for (const c of list + ",") {
+    if ("{[(".includes(c)) depth++;
+    if ("}])".includes(c)) depth--;
+    if (c === "," && depth === 0) {
+      const k = cur.trim().match(/^([A-Za-z_$][\w$]*)/)?.[1];
+      if (k && !cur.trim().startsWith("...")) keys.push(k);
+      cur = "";
+    } else cur += c;
+  }
+  return keys;
+}
+
+/** Every exported function component in the project's code files, with the props it reads. */
+async function codeComponents() {
+  const out = [];
+  for (const file of await filesUnder(CODE, (f) => /\.(t|j)sx?$/.test(f))) {
+    const src = await readFile(file, "utf8");
+    const rel = path.relative(CODE, file).split(path.sep).join("/");
+    for (const m of src.matchAll(/export\s+(default\s+)?function\s+([A-Z][\w$]*)\s*\(\s*(\{[^)]*\}|[\w$]+)/g)) {
+      let keys;
+      if (m[3].startsWith("{")) keys = propKeys(m[3].slice(1, m[3].lastIndexOf("}")));
+      else {
+        const body = src.slice(m.index);
+        const d = body.match(new RegExp(`(?:const|let)\\s*\\{([^]*?)\\}\\s*=\\s*${m[3].replace("$", "\\$")}\\b`));
+        keys = d ? propKeys(d[1]) : [];
+      }
+      out.push({ file: rel, name: m[2], isDefault: !!m[1], keys: new Set(keys) });
+    }
+  }
+  return out;
+}
+
+const DYN = Symbol("dynamic");
+/** A literal's value, or DYN when it depends on anything at run time. */
+function literal(n) {
+  switch (n?.type) {
+    case "Literal": return n.value;
+    case "TemplateLiteral": return n.expressions.length ? DYN : n.quasis[0].value.cooked;
+    case "UnaryExpression":
+      if (n.operator === "!" && n.argument.type === "Literal") return !n.argument.value;
+      if (n.operator === "-") { const v = literal(n.argument); return typeof v === "number" ? -v : DYN; }
+      return DYN;
+    case "ArrayExpression": { const a = n.elements.map(literal); return a.includes(DYN) ? DYN : a; }
+    case "ObjectExpression": {
+      const o = {};
+      for (const p of n.properties) {
+        if (p.type !== "Property" || p.computed) return DYN;
+        const v = literal(p.value);
+        if (v === DYN) return DYN;
+        o[p.key.name ?? p.key.value] = v;
+      }
+      return o;
+    }
+  }
+  return DYN;
+}
+const propOf = (obj, k) => obj.properties.find((p) => p.type === "Property" && !p.computed && (p.key.name ?? p.key.value) === k);
+
+/** Where each code component is used in the published scripts. */
+async function findIslands() {
+  const components = await codeComponents();
+  if (!components.length) return new Map();
+  const modules = new Map();
+  for (const file of await filesUnder(path.join(SITE, "assets"), (f) => f.endsWith(".mjs"))) {
+    try { modules.set(file, acorn.parse(await readFile(file, "utf8"), { ecmaVersion: "latest", sourceType: "module" })); } catch {}
+  }
+
+  // The function behind a name, following imports between the scripts.
+  const resolve = (file, name, depth = 0) => {
+    const ast = modules.get(file);
+    if (!ast || depth > 5) return null;
+    for (const st of ast.body) {
+      if (st.type === "ImportDeclaration") {
+        const spec = st.specifiers.find((x) => x.local.name === name);
+        if (spec) {
+          const target = path.resolve(path.dirname(file), st.source.value);
+          const exported = spec.type === "ImportDefaultSpecifier" ? "default" : spec.imported.name;
+          const tast = modules.get(target);
+          if (!tast) return null;
+          for (const ts of tast.body) {
+            if (ts.type === "ExportNamedDeclaration" && !ts.declaration) {
+              const e = ts.specifiers.find((x) => (x.exported.name ?? x.exported.value) === exported);
+              if (e) return resolve(target, e.local.name, depth + 1);
+            }
+          }
+          return null;
+        }
+      }
+    }
+    let fn = null;
+    walk.simple(ast, {
+      FunctionDeclaration(n) { if (n.id?.name === name) fn ??= n; },
+      VariableDeclarator(n) { if (n.id.name === name && /Function/.test(n.init?.type)) fn ??= n.init; },
+    });
+    return fn;
+  };
+  // The prop names a (minified) function destructures from its first argument.
+  const fnKeys = (fn) => {
+    const p = fn?.params[0];
+    if (!p) return null;
+    const pat = (o) => new Set(o.properties.filter((x) => x.type === "Property").map((x) => x.key.name ?? x.key.value));
+    if (p.type === "ObjectPattern") return pat(p);
+    let keys = null;
+    walk.simple(fn.body, { VariableDeclarator(n) { if (!keys && n.id.type === "ObjectPattern" && n.init?.type === "Identifier" && n.init.name === p.name) keys = pat(n.id); } });
+    return keys;
+  };
+  const match = (keys, hint) => {
+    if (!keys?.size) return null;
+    let best = null, score = 0;
+    for (const c of components) {
+      const inter = [...keys].filter((k) => c.keys.has(k)).length;
+      let s = inter / new Set([...keys, ...c.keys]).size;
+      if (hint && c.file.replace(/\.\w+$/, "").split("/").pop() === hint) s += 0.2;
+      if (s > score) { score = s; best = c; }
+    }
+    return score >= 0.6 ? best : null;
+  };
+
+  const islands = new Map(); // container class -> island
+  for (const [file, ast] of modules) {
+    walk.ancestor(ast, {
+      CallExpression(n, _, ancestors) {
+        const o = n.arguments[1];
+        if (o?.type !== "ObjectExpression" || !propOf(o, "isAuthoredByUser")) return;
+        const cls = literal(propOf(o, "className")?.value);
+        const child = propOf(o, "children")?.value;
+        if (typeof cls !== "string" || !cls.endsWith("-container") || child?.type !== "CallExpression" || child.arguments[0]?.type !== "Identifier") return;
+
+        const fnName = child.arguments[0].name;
+        const imp = ast.body.find((st) => st.type === "ImportDeclaration" && st.specifiers.some((x) => x.local.name === fnName));
+        const hint = imp && path.basename(imp.source.value).split(".")[0];
+        const keys = fnKeys(resolve(file, fnName));
+        const component = match(keys, hint);
+        if (process.env.REACT_DEBUG) console.error("instance", cls, fnName, hint, keys && [...keys].join(","), "->", component?.file, component?.name);
+        if (!component) return;
+
+        // CMS-bound values: `{fieldId: local = item.fieldId ?? fallback}` in an enclosing function.
+        const fields = new Map();
+        for (const a of ancestors) {
+          if (!/Function/.test(a.type)) continue;
+          walk.simple(a.body, { ObjectPattern(p) {
+            for (const x of p.properties) {
+              if (x.type !== "Property" || x.computed) continue;
+              const v = x.value.type === "AssignmentPattern" ? x.value.left : x.value;
+              if (v.type === "Identifier" && /^[A-Za-z0-9_]{9}$/.test(x.key.name ?? "")) fields.set(v.name, x.key.name);
+            }
+          } });
+        }
+        const props = {}, bound = {};
+        let ok = true;
+        for (const p of child.arguments[1]?.properties || []) {
+          if (p.type !== "Property" || p.computed) { ok = false; continue; }
+          const k = p.key.name ?? p.key.value;
+          if (["id", "layoutId", "name", "width", "height"].includes(k)) continue;
+          const v = literal(p.value);
+          if (v !== DYN) { props[k] = v; continue; }
+          let field = p.value.type === "Identifier" ? fields.get(p.value.name) : null;
+          // e.g. an enum lookup, enums.fieldId?.(item, locale)
+          if (!field) walk.simple(p.value, { MemberExpression(m) { if (!field && /^[A-Za-z0-9_]{9}$/.test(m.property.name ?? "")) field = m.property.name; } });
+          if (field) bound[k] = field;
+          else ok = false;
+        }
+        if (process.env.REACT_DEBUG) console.error("  bound", JSON.stringify(bound), "ok", ok);
+        if (!ok) return;
+        const key = tidy(cls);
+        if (islands.has(key) && JSON.stringify(islands.get(key).props) !== JSON.stringify(props)) { islands.get(key).ambiguous = true; return; }
+        islands.set(key, { component, props, bound });
+      },
+    });
+  }
+  for (const [k, v] of islands) if (v.ambiguous) islands.delete(k);
+  return islands;
+}
+
+/** CMS items by slug, with their field values by field id. */
+async function cmsItems() {
+  const bySlug = new Map();
+  for (const file of await filesUnder(path.join(PROJECT, "cms"), (f) => f.endsWith(".json"))) {
+    const c = JSON.parse(await readFile(file, "utf8"));
+    for (const item of c.items || []) {
+      const values = Object.fromEntries(Object.entries(item.fieldData || {}).map(([id, f]) => [id, f?.value]));
+      (bySlug.get(item.slug) || bySlug.set(item.slug, []).get(item.slug)).push(values);
+    }
+  }
+  return bySlug;
+}
+
+const ISLANDS = await findIslands();
+const CMS = ISLANDS.size ? await cmsItems() : new Map();
+let page = { slug: "", uses: new Map() }; // the page being converted
+const componentId = (c) => "Live" + c.name;
+
+/** The live component to render inside a component container, if this is one. */
+function islandFor(node) {
+  const cls = node.attrs?.find((a) => a.name === "class")?.value.split(/\s+/) || [];
+  const island = cls.map((c) => ISLANDS.get(c)).find(Boolean);
+  if (!island) return null;
+  const props = { ...island.props };
+  const fieldIds = Object.values(island.bound);
+  if (fieldIds.length) {
+    const item = (CMS.get(page.slug) || []).find((v) => fieldIds.every((id) => id in v));
+    if (!item) return null; // not on an item page: leave the rendered markup as it is
+    for (const [k, id] of Object.entries(island.bound)) props[k] = item[id];
+  }
+  page.uses.set(componentId(island.component), island.component);
+  return `<${componentId(island.component)} {...${JSON.stringify(props)}} />`;
+}
 
 // ------------------------------------------------------------ pages
 
@@ -191,10 +431,50 @@ for (const file of [...report.pages, ...(existsSync(path.join(SITE, "404.html"))
   const title = find(head, (n) => n.tagName === "title")?.childNodes[0]?.value?.trim() || "";
   const name = componentName(route === "/404/" ? "/404" : route.replace(/\/$/, "") || "/");
   if (routes.some((r) => r.name === name)) continue;
-  routes.push({ route: route === "/404/" ? "*" : route, name, title, description: meta("description") || "", css: styles.join("\n"), body: main.childNodes.map((c) => jsx(c, 3)).filter(Boolean).join("\n") });
+  page = { slug: route.split("/").filter(Boolean).pop() || "", uses: new Map() };
+  const body = main.childNodes.map((c) => jsx(c, 3)).filter(Boolean).join("\n");
+  routes.push({ route: route === "/404/" ? "*" : route, name, title, description: meta("description") || "", css: styles.join("\n"), body, uses: page.uses });
 }
 
 // ------------------------------------------------------------ write the project
+
+// What the code files import from the design tool, as plain functions: the
+// property controls only matter inside the editor.
+const STUDIO_SHIM = `// Stand-ins for the design tool's helpers that the components in src/code/
+// import. Property controls only mean something inside the editor, so here
+// they do nothing; the rest are small working versions.
+import { useSyncExternalStore } from "react";
+
+export function addPropertyControls() {}
+
+/** ControlType.Color === "color", and so on. */
+export const ControlType = new Proxy({}, { get: (_, key) => String(key).toLowerCase() });
+
+/** Always false: this is the live site, never a static render. */
+export const useIsStaticRenderer = () => false;
+
+export const RenderTarget = {
+  canvas: "CANVAS", export: "EXPORT", thumbnail: "THUMBNAIL", preview: "PREVIEW",
+  current: () => "PREVIEW",
+  hasRestrictions: () => false,
+};
+
+/** A tiny shared store: const useStore = createStore({...}); const [state, setState] = useStore(). */
+export function createStore(initial) {
+  let state = initial;
+  const listeners = new Set();
+  const set = (next) => {
+    state = { ...state, ...(typeof next === "function" ? next(state) : next) };
+    listeners.forEach((l) => l());
+  };
+  const subscribe = (l) => (listeners.add(l), () => listeners.delete(l));
+  return function useStore() {
+    return [useSyncExternalStore(subscribe, () => state, () => state), set];
+  };
+}
+
+export const randomColor = () => "#" + Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0");
+`;
 
 await rm(OUT, { recursive: true, force: true });
 await mkdir(path.join(OUT, "src", "pages"), { recursive: true });
@@ -314,7 +594,8 @@ overwritten on every sync until you decide to take it over by hand.
 };
 for (const r of routes) {
   files[`src/pages/${r.name}.css`] = r.css + "\n";
-  files[`src/pages/${r.name}.jsx`] = `import css from "./${r.name}.css?inline";
+  const imports = [...r.uses].map(([id, c]) => `import ${c.isDefault ? id : `{ ${c.name} as ${id} }`} from "../code/${c.file}";\n`).join("");
+  files[`src/pages/${r.name}.jsx`] = `${imports}import css from "./${r.name}.css?inline";
 
 export default function ${r.name}() {
   return (
@@ -326,6 +607,26 @@ ${r.body}
 }
 `;
 }
+// The project's code files, with the builder's module swapped for src/studio.js.
+const usesMotion = [];
+for (const file of await filesUnder(CODE, (f) => /\.(t|j)sx?$/.test(f))) {
+  const rel = path.relative(CODE, file).split(path.sep).join("/");
+  const shim = "../".repeat(rel.split("/").length) + "studio.js";
+  let src = (await readFile(file, "utf8"))
+    .replace(/from\s+["']studio["']/g, `from "${shim}"`)
+    .replace(/from\s+["']https:\/\/studio\.com\/m\/[^"']+["']/g, `from "${shim}"`);
+  if (/from\s+["']studio-motion["']/.test(src)) { src = src.replace(/from\s+["']studio-motion["']/g, `from "motion/react"`); usesMotion.push(rel); }
+  files[`src/code/${rel}`] = src;
+}
+if (Object.keys(files).some((f) => f.startsWith("src/code/"))) {
+  files["src/studio.js"] = STUDIO_SHIM;
+  if (usesMotion.length) {
+    const pkg = JSON.parse(files["package.json"]);
+    pkg.dependencies.motion = "^12.0.0";
+    files["package.json"] = JSON.stringify(pkg, null, 2) + "\n";
+  }
+}
+
 for (const [name, data] of Object.entries(files)) {
   await mkdir(path.dirname(path.join(OUT, name)), { recursive: true });
   await writeFile(path.join(OUT, name), data);
@@ -344,4 +645,5 @@ async function copyAssets(from, to) {
 }
 if (existsSync(path.join(SITE, "assets"))) await copyAssets(path.join(SITE, "assets"), path.join(OUT, "public", "assets"));
 
-console.error(`React project with ${routes.length} pages written to ${OUT} (base ${BASE})`);
+const live = new Set(routes.flatMap((r) => [...r.uses.keys()]));
+console.error(`React project with ${routes.length} pages written to ${OUT} (base ${BASE})${live.size ? `, live components: ${[...live].join(", ")}` : ""}`);

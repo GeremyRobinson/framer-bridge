@@ -112,12 +112,14 @@ jobs:
         run: node tools/project.mjs --out _project
       - name: Rebuild the site as a React app
         # Writes app/, a React + Vite project of every page with no builder
-        # code in it, and serves its build at <site>/react/ as a preview.
+        # code in it (the site's own code components run live in it), and serves its build at <site>/react/ as a preview.
         # A problem here never blocks the site.
         if: hashFiles('tools/react.mjs') != ''
         continue-on-error: true
         run: |
-          node tools/react.mjs --site _site --out _app --base "${SITE_BASE}react/"
+          # The site's own code components come from the saved design project.
+          proj=project; if [ -f _project/project.json ]; then proj=_project; fi
+          node tools/react.mjs --site _site --out _app --project "$proj" --base "${SITE_BASE}react/"
           cd _app
           npm install --no-audit --no-fund --loglevel=error
           npm run build

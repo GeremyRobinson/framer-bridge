@@ -20,7 +20,8 @@ site to a GitHub repository and keeps a GitHub Pages copy of it in sync.
 
    Each sync also commits the full exported site to `site/` and a React +
    Vite version of it to `app/` (served as a preview at `<site>/react/`),
-   which runs none of the builder's code. Nothing Bridge
+   which runs none of the builder's code. When the design project is saved,
+   the site's own code components (from `project/code/`) run live in it. Nothing Bridge
    writes to the repo names Framer: file names, commit messages, the README
    and the exported site itself only carry the site's own name (the exporter
    replaces the builder's name in the output; `--keep-names` turns that off).
