@@ -150,8 +150,12 @@ input.pill::placeholder { color: var(--faint); }
 /* ---------------------------------------------------------------- sign in */
 .signin { margin-top: 10px; }
 .connect { padding: 56px 40px 32px; }
-.pair { display: grid; grid-template-columns: minmax(0, 320px) minmax(60px, 180px) minmax(0, 320px); justify-content: center; align-items: start; }
-.node.cnode { position: relative; left: auto; top: auto; width: auto; animation: rise .5s both; }
+.pair { display: grid; grid-template-columns: minmax(0, 320px) minmax(60px, 180px) minmax(0, 320px); justify-content: center; align-items: stretch; }
+.node.cnode { position: relative; left: auto; top: auto; width: auto; animation: rise .5s both; display: flex; flex-direction: column; }
+/* The token fallback sits at the foot of the card, so both cards read the same way. */
+.cnode .token-alt { margin-top: auto; }
+.cnode .token-alt[open] { margin-top: 0; }
+.pair-wire { align-self: start; }
 .connect .pill { background: var(--card); }
 .cnode .box { display: grid; gap: 6px; padding: 8px; }
 .cnode .box-title { padding: 0 6px; }

@@ -467,6 +467,14 @@ function countUp() {
 
 const SVGNS = "http://www.w3.org/2000/svg";
 let drawnFor = null;
+let wiresSig = null;
+
+/** Position of el within root, ignoring transforms (so entrance animations don't skew wires). */
+function offsetIn(el, root) {
+  let x = 0, y = 0;
+  for (let e = el; e && e !== root; e = e.offsetParent) { x += e.offsetLeft; y += e.offsetTop; }
+  return { x, y, w: el.offsetWidth, h: el.offsetHeight };
+}
 
 function portOf(el, side) {
   const x = el.offsetLeft, y = el.offsetTop, w = el.offsetWidth, h = el.offsetHeight;
@@ -507,6 +515,10 @@ function renderWires(p, m) {
     { id: "w-dep", d: hCurve(headPort(n("export"), "right"), headPort(n("deploy"), "left")), cls: m.branch === "yes" ? wireState(m.deploy) : m.lastShip ? "ok" : "idle" },
     { id: "w-live", d: vCurve(portOf(n("deploy"), "bottom"), portOf(n("live"), "top")), cls: m.deploy === "busy" ? "busy" : wireState(m.live) },
   ];
+  // Rebuilding restarts every moving dot, so only rebuild when something changed.
+  const sig = p.full + JSON.stringify(wires);
+  if (sig === wiresSig && svg.childElementCount) return;
+  wiresSig = sig;
   const draw = drawnFor !== p.full;
   drawnFor = p.full;
   svg.setAttribute("viewBox", `0 0 ${CANVAS_W} ${CANVAS_H}`);
@@ -549,12 +561,13 @@ function renderWires(p, m) {
         const am = document.createElementNS(SVGNS, "animateMotion");
         const secsLen = w.ambient ? 3.2 : 1.4;
         am.setAttribute("dur", `${secsLen}s`);
-        am.setAttribute("begin", `${(i * secsLen) / packets}s`);
+        am.setAttribute("begin", `${-(i * secsLen) / packets}s`);
         am.setAttribute("repeatCount", "indefinite");
         const mp = document.createElementNS(SVGNS, "mpath");
         mp.setAttribute("href", `#${w.id}`);
         am.append(mp);
-        dot.append(am, fadeAtEnds(secsLen, (i * secsLen) / packets));
+        dot.setAttribute("opacity", "0");
+        dot.append(am, fadeAtEnds(secsLen, -(i * secsLen) / packets));
         top.append(dot);
       }
     }
@@ -1310,38 +1323,48 @@ function renderMap() {
   tick();
 }
 
+let mapWiresSig = null;
 function drawMapWires() {
   const map = $("#map");
   const svg = $("#map-wires");
   if (!map || map.offsetParent === null) return;
-  const box = map.getBoundingClientRect();
   if (getComputedStyle(svg).display === "none") return;
-  const pt = (el, side) => {
-    const r = el.getBoundingClientRect();
-    return [side === "right" ? r.right - box.left : r.left - box.left, r.top - box.top + r.height / 2];
+  // The centre of a port circle, or the node's side if it has none.
+  const pt = (node, side) => {
+    const port = $(side === "right" ? ".mport.out" : ".mport.in", node);
+    const o = offsetIn(port || node, map);
+    return port ? [o.x + o.w / 2, o.y + o.h / 2] : [side === "right" ? o.x + o.w : o.x, o.y + o.h / 2];
   };
-  svg.setAttribute("viewBox", `0 0 ${box.width} ${box.height}`);
-  svg.innerHTML = "";
+  const links = [];
   for (const p of projects.values()) {
     const f = $(`.mnode.fr[data-framer="${CSS.escape(p.config.framerUrl)}"]`, map);
     const g = $(`.mnode.gh[data-repo="${CSS.escape(p.full)}"]`, map);
     if (!f || !g) continue;
-    const [st] = connState(p);
+    links.push({ id: "mw-" + p.full.replace(/[^\w-]/g, "_"), d: hCurve(pt(f, "right"), pt(g, "left")), st: connState(p)[0] });
+  }
+  // Rebuilding restarts the moving dots, so only rebuild when something changed.
+  const sig = `${map.offsetWidth}x${map.offsetHeight}` + JSON.stringify(links);
+  if (sig === mapWiresSig && svg.childElementCount) return;
+  mapWiresSig = sig;
+  svg.setAttribute("viewBox", `0 0 ${map.offsetWidth} ${map.offsetHeight}`);
+  svg.innerHTML = "";
+  for (const l of links) {
     const path = document.createElementNS(SVGNS, "path");
-    path.id = "mw-" + p.full.replace(/[^\w-]/g, "_");
-    path.setAttribute("d", hCurve(pt(f, "right"), pt(g, "left")));
-    path.setAttribute("class", "wire" + (st === "busy" ? " busy" : st === "" ? " idle" : ""));
+    path.id = l.id;
+    path.setAttribute("d", l.d);
+    path.setAttribute("class", "wire" + (l.st === "busy" ? " busy" : l.st === "" ? " idle" : ""));
     svg.append(path);
-    if (st === "ok" || st === "busy") {
-      const n = st === "busy" ? 2 : 1;
+    if (l.st === "ok" || l.st === "busy") {
+      const n = l.st === "busy" ? 3 : 1;
+      const dur = l.st === "busy" ? 1.8 : 3.6;
       for (let i = 0; i < n; i++) {
         const dot = document.createElementNS(SVGNS, "circle");
         dot.setAttribute("r", 3);
-        dot.setAttribute("class", "runner-dot" + (st === "busy" ? " busy" : ""));
-        const dur = st === "busy" ? 1.2 : 3.4;
-        dot.innerHTML = `<animateMotion dur="${dur}s" begin="${(i * dur) / n}s" repeatCount="indefinite"><mpath href="#${path.id}"/></animateMotion>`;
-        dot.append(fadeAtEnds(dur, (i * dur) / n));
+        dot.setAttribute("class", "runner-dot" + (l.st === "busy" ? " busy" : ""));
         dot.setAttribute("opacity", "0");
+        const begin = -(i * dur) / n;
+        dot.innerHTML = `<animateMotion dur="${dur}s" begin="${begin}s" repeatCount="indefinite"><mpath href="#${l.id}"/></animateMotion>`;
+        dot.append(fadeAtEnds(dur, begin));
         svg.append(dot);
       }
     }
@@ -1351,6 +1374,14 @@ function drawMapWires() {
   drag.setAttribute("class", "wire");
   svg.append(drag);
 }
+
+// Redraw the map's wires whenever its layout shifts (fonts loading, text changing, resizing).
+if ("ResizeObserver" in window) {
+  const ro = new ResizeObserver(() => requestAnimationFrame(drawMapWires));
+  const watch = () => { const g = $("#map-grid"); if (g) ro.observe(g); };
+  document.readyState === "loading" ? addEventListener("DOMContentLoaded", watch) : watch();
+}
+document.fonts?.ready.then(() => requestAnimationFrame(drawMapWires));
 
 function renderMapSide() {
   const all = [...projects.values()];
