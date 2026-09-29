@@ -119,7 +119,8 @@ jobs:
         run: |
           # The site's own code components come from the saved design project.
           proj=project; if [ -f _project/project.json ]; then proj=_project; fi
-          node tools/react.mjs --site _site --out _app --project "$proj" --base "${SITE_BASE}react/"
+          # Hand-written parts in app/src/custom/ are kept.
+          node tools/react.mjs --site _site --out _app --project "$proj" --custom app/src/custom --base "${SITE_BASE}react/"
           cd _app
           npm install --no-audit --no-fund --loglevel=error
           npm run build

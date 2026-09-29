@@ -30,6 +30,7 @@ const { values: opts } = parseArgs({
     out: { type: "string", default: "app" },
     base: { type: "string" },
     project: { type: "string" },
+    custom: { type: "string" },
   },
 });
 const SITE = path.resolve(opts.site);
@@ -38,6 +39,12 @@ const OUT = path.resolve(opts.out);
 // site's own components, which are brought back to life where they're used.
 const PROJECT = path.resolve(opts.project || "project");
 const CODE = path.join(PROJECT, "code");
+// Hand-written parts that replace a component on the pages; kept across
+// regenerations. src/custom/islands.json maps a container class to a file:
+//   { "s-zdpmr7-container": "CartPanel.jsx" }
+// The file's default export gets the className and style of the component's
+// root as rendered on that page (they differ per breakpoint).
+const CUSTOM = path.resolve(opts.custom || path.join(OUT, "src", "custom"));
 
 // ------------------------------------------------------------ parser
 
@@ -377,6 +384,9 @@ async function cmsItems() {
   return bySlug;
 }
 
+const customFiles = new Map(); // path in src/custom -> contents
+for (const file of await filesUnder(CUSTOM, () => true)) customFiles.set(path.relative(CUSTOM, file).split(path.sep).join("/"), await readFile(file));
+const CUSTOM_ISLANDS = customFiles.has("islands.json") ? JSON.parse(customFiles.get("islands.json")) : {};
 const ISLANDS = await findIslands();
 const CMS = ISLANDS.size ? await cmsItems() : new Map();
 let page = { slug: "", uses: new Map() }; // the page being converted
@@ -385,6 +395,15 @@ const componentId = (c) => "Live" + c.name;
 /** The live component to render inside a component container, if this is one. */
 function islandFor(node) {
   const cls = node.attrs?.find((a) => a.name === "class")?.value.split(/\s+/) || [];
+  const custom = cls.map((c) => CUSTOM_ISLANDS[c]).find(Boolean);
+  if (custom) {
+    const root = (node.childNodes || []).find((c) => c.tagName);
+    const id = "Custom" + path.basename(custom, path.extname(custom)).replace(/[^A-Za-z0-9]/g, "");
+    page.uses.set(id, { file: custom, isDefault: true, custom: true });
+    const rootClass = root?.attrs.find((a) => a.name === "class")?.value;
+    const rootStyle = root?.attrs.find((a) => a.name === "style")?.value;
+    return `<${id}${rootClass ? ` className=${JSON.stringify(rootClass)}` : ""}${rootStyle ? ` style=${styleObject(rootStyle)}` : ""} />`;
+  }
   const island = cls.map((c) => ISLANDS.get(c)).find(Boolean);
   if (!island) return null;
   const props = { ...island.props };
@@ -594,7 +613,7 @@ overwritten on every sync until you decide to take it over by hand.
 };
 for (const r of routes) {
   files[`src/pages/${r.name}.css`] = r.css + "\n";
-  const imports = [...r.uses].map(([id, c]) => `import ${c.isDefault ? id : `{ ${c.name} as ${id} }`} from "../code/${c.file}";\n`).join("");
+  const imports = [...r.uses].map(([id, c]) => `import ${c.isDefault ? id : `{ ${c.name} as ${id} }`} from "../${c.custom ? "custom" : "code"}/${c.file}";\n`).join("");
   files[`src/pages/${r.name}.jsx`] = `${imports}import css from "./${r.name}.css?inline";
 
 export default function ${r.name}() {
@@ -626,6 +645,8 @@ if (Object.keys(files).some((f) => f.startsWith("src/code/"))) {
     files["package.json"] = JSON.stringify(pkg, null, 2) + "\n";
   }
 }
+
+for (const [name, data] of customFiles) files[`src/custom/${name}`] = data;
 
 for (const [name, data] of Object.entries(files)) {
   await mkdir(path.dirname(path.join(OUT, name)), { recursive: true });
