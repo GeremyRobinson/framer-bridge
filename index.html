@@ -49,15 +49,17 @@
               <span class="node-state"><i class="dot"></i><span>Not connected</span></span>
             </div>
             <div class="box" id="github-account" hidden>
-              <span class="box-title">Account</span>
               <button type="button" id="github-signin" class="pill pill-btn">Sign in with GitHub<i class="tri right"></i></button>
-              <p class="cnote muted">Your sites follow you to every device.</p>
             </div>
-            <div class="box">
-              <label for="token" class="box-title">Access token</label>
-              <input id="token" class="pill mono" type="password" autocomplete="off" placeholder="ghp_…">
-            </div>
-            <p class="cnote muted"><a id="token-link" target="_blank" rel="noopener">Create a token</a> with <span class="mono">repo</span> and <span class="mono">workflow</span>. It stays in this browser.</p>
+            <p class="cnote muted" id="github-account-note" hidden>One click. Your sites follow you to every device.</p>
+            <details class="token-alt" id="token-alt" open>
+              <summary class="cnote muted" id="token-alt-toggle" hidden>Use an access token instead</summary>
+              <div class="box">
+                <label for="token" class="box-title">Access token</label>
+                <input id="token" class="pill mono" type="password" autocomplete="off" placeholder="ghp_…">
+              </div>
+              <p class="cnote muted"><a id="token-link" target="_blank" rel="noopener">Create a token</a> with <span class="mono">repo</span> and <span class="mono">workflow</span>. It stays in this browser.</p>
+            </details>
           </div>
         </div>
         <div class="connect-foot">

@@ -1670,7 +1670,14 @@ $("#github-signin").addEventListener("click", async () => {
 });
 
 async function start() {
-  $("#github-account").hidden = !account.enabled();
+  // With accounts on, GitHub is one click and the token is the fallback.
+  const oneClick = account.enabled();
+  $("#github-account").hidden = !oneClick;
+  $("#github-account-note").hidden = !oneClick;
+  $("#token-alt-toggle").hidden = !oneClick;
+  $("#token-alt").open = !oneClick;
+  $(".connect-foot").hidden = oneClick;
+  $("#token-alt").addEventListener("toggle", () => { if (oneClick) $(".connect-foot").hidden = !$("#token-alt").open; });
   let session = null;
   try { session = await account.currentSession(); } catch (err) { console.warn("Couldn't read the sign-in", err); }
   accountId = session?.user?.id || null;
