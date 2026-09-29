@@ -150,19 +150,21 @@ input.pill::placeholder { color: var(--faint); }
 /* ---------------------------------------------------------------- sign in */
 .signin { margin-top: 10px; }
 .connect { padding: 56px 40px 32px; }
+/* The start screen fills the window with the two cards in its middle. */
+.signin .connect { min-height: calc(100vh - 82px); min-height: calc(100dvh - 82px); display: flex; flex-direction: column; justify-content: center; }
 .pair { display: grid; grid-template-columns: minmax(0, 320px) minmax(60px, 180px) minmax(0, 320px); justify-content: center; align-items: stretch; }
 .node.cnode { position: relative; left: auto; top: auto; width: auto; animation: rise .5s both; display: flex; flex-direction: column; }
 /* The token fallback sits at the foot of the card, so both cards read the same way. */
 .cnode .token-alt { margin-top: auto; }
 .cnode .token-alt[open] { margin-top: 0; }
-.pair-wire { align-self: start; }
+.pair-wire { align-self: center; }
 .connect .pill { background: var(--card); }
 .cnode .box { display: grid; gap: 6px; padding: 8px; }
 .cnode .box-title { padding: 0 6px; }
 .cnode .pill { background: var(--card); }
 .cnote { padding: 8px 10px 4px; }
-/* Level with the node titles, so the ports sit on the card edges beside them. */
-.pair-wire { position: relative; height: 0; border-top: var(--line) dashed var(--faint); margin: 22px -1px 0; }
+/* Across the middle of the two cards, the ports on the middle of their sides. */
+.pair-wire { position: relative; height: 0; border-top: var(--line) dashed var(--faint); margin: 0 -1px; }
 .token-alt summary { list-style: none; cursor: pointer; padding-top: 4px; }
 .token-alt summary::-webkit-details-marker { display: none; }
 .token-alt summary:hover { color: var(--text); }
@@ -334,6 +336,7 @@ fieldset.seg input:checked + span { color: var(--text); box-shadow: inset 0 0 0 
   .bar { flex-wrap: wrap; border-radius: 18px; }
   .bar-end { width: 100%; justify-content: space-between; gap: 10px; }
   .connect { padding: 20px 12px; }
+  .signin .connect { min-height: 0; }
   .pair { grid-template-columns: 1fr; }
   .pair-wire { justify-self: center; width: 0; height: 36px; border-top: 0; border-left: var(--line) dashed var(--faint); margin: 0; }
   .pair-wire.ok { border-left-style: solid; border-left-color: var(--text); }
