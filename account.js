@@ -6,7 +6,7 @@
 // supabase/schema.sql lets each user read and write only their own row.
 
 export const SUPABASE_URL = "https://azlmlldumsuejdkduxoy.supabase.co";
-export const SUPABASE_KEY = "";
+export const SUPABASE_KEY = "sb_publishable_7QttQqgZQZ6lSA6ZDsTcTA_vkt7JehV";
 
 // repo: read and write the site repos. workflow: install the sync workflow.
 const SCOPES = "repo workflow read:user";
