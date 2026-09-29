@@ -7,8 +7,12 @@ site to a GitHub repository and keeps a GitHub Pages copy of it in sync.
 
 ## How it works
 
-1. Sign in with a GitHub token (the `repo` and `workflow` scopes). The token
+1. Sign in with GitHub (through Supabase, see `account.js`), or paste a GitHub
+   token with the `repo` and `workflow` scopes. Either way the GitHub token
    stays in your browser; the app has no server and talks to GitHub directly.
+   Signed in with GitHub, your sites are saved per user in Supabase
+   (`supabase/schema.sql`, one row per user behind row-level security), so
+   they follow you to every device.
 2. Connect a project: paste the published Framer address, choose a new or
    existing repository, and optionally a custom domain. The app turns on
    GitHub Pages and commits these to the repo:

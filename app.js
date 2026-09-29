@@ -1,6 +1,10 @@
 // Bridge: keeps a GitHub Pages copy of a published Framer site in sync, and
 // shows the sync happening live. There is no server: everything below talks
-// to the GitHub REST API from the browser with the user's own token.
+// to the GitHub REST API from the browser with the user's own GitHub token,
+// which comes from signing in with GitHub (account.js, through Supabase) or
+// from an access token pasted on the start screen.
+
+import * as account from "./account.js";
 
 const API = "https://api.github.com";
 // What Bridge installs in a repo. The names only describe the site, so nothing
@@ -37,11 +41,37 @@ const projects = new Map();
 const jobCache = new Map();
 let selected = store.get(SELECTED_KEY) || null; // null: the connection map
 const SITES_KEY = "framer-bridge:sites";
+const PENDING_SITE_KEY = "framer-bridge:pending-site";
 /** Repositories the user can push to (from the last scan). */
 let allRepos = [];
 /** Framer sites added on the map but not connected yet. */
 let looseSites = (() => { try { return JSON.parse(store.get(SITES_KEY) || "[]"); } catch { return []; } })();
-const saveSites = () => store.set(SITES_KEY, JSON.stringify(looseSites));
+/** Signed in through Supabase: its user id, so settings follow the user. */
+let accountId = null;
+let pushTimer;
+const saveSites = () => {
+  store.set(SITES_KEY, JSON.stringify(looseSites));
+  if (!accountId) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => account.saveSettings(accountId, { sites: looseSites }).catch((err) => console.warn("Couldn't save settings", err)), 500);
+};
+
+/** Brings in the sites saved on other devices. */
+async function pullSettings() {
+  if (!accountId) return;
+  try {
+    const remote = await account.loadSettings(accountId);
+    const merged = [...new Set([...(remote.sites || []), ...looseSites])];
+    const changed = merged.length !== (remote.sites || []).length;
+    looseSites = merged;
+    store.set(SITES_KEY, JSON.stringify(looseSites));
+    if (changed) saveSites();
+    mapHtml = null;
+    render();
+  } catch (err) {
+    console.warn("Couldn't load settings", err);
+  }
+}
 let pollTimer = null;
 let scanned = false;
 
@@ -1454,6 +1484,7 @@ async function signIn(t, user) {
   render();
   refreshAll();
   setInterval(tick, 1000);
+  pullSettings();
   scanProjects().catch((err) => {
     scanned = true;
     $("#scan-status").textContent = "Couldn't look for other connected projects.";
@@ -1462,7 +1493,8 @@ async function signIn(t, user) {
   });
 }
 
-function signOut() {
+async function signOut() {
+  await account.signOut();
   store.del(TOKEN_KEY);
   store.del(CACHE_KEY);
   store.del(SELECTED_KEY);
@@ -1593,11 +1625,40 @@ addEventListener("resize", () => {
   });
 });
 
-if (token) {
-  signIn(token).catch(() => {
-    store.del(TOKEN_KEY);
-    $("#view-signin").hidden = false;
-  });
-} else {
+$("#github-signin").addEventListener("click", async () => {
+  setConn("cn-github", "busy", "Opening GitHub");
+  // Keep a site typed in on the left for when GitHub sends us back.
+  try { store.set(PENDING_SITE_KEY, normalizeFramerUrl($("#signin-framer").value)); } catch { store.del(PENDING_SITE_KEY); }
+  try {
+    await account.signInWithGitHub();
+  } catch (err) {
+    setConn("cn-github", "err", "Sign-in failed");
+    $("#signin-error").textContent = err.message;
+    $("#signin-error").hidden = false;
+  }
+});
+
+async function start() {
+  $("#github-account").hidden = !account.enabled();
+  let session = null;
+  try { session = await account.currentSession(); } catch (err) { console.warn("Couldn't read the sign-in", err); }
+  accountId = session?.user?.id || null;
+  // GitHub hands over its token only on the way back from signing in.
+  if (session?.provider_token) token = session.provider_token;
+  if (token) {
+    try {
+      await signIn(token);
+      const pending = store.get(PENDING_SITE_KEY);
+      store.del(PENDING_SITE_KEY);
+      if (pending && session?.provider_token) { select(null); addSite(pending); toast("Now drag its dot to a repository"); }
+      return;
+    } catch { store.del(TOKEN_KEY); token = null; }
+  }
+  if (session && !token) {
+    // Signed in, but this browser has no GitHub token any more: sign in again to get one.
+    accountId = null;
+    await account.signOut();
+  }
   $("#view-signin").hidden = false;
 }
+start();

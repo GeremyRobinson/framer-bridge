@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Collect the site files
         run: |
-          mkdir _site && cp -r index.html app.js style.css template vendor _site/
+          mkdir _site && cp -r index.html app.js account.js style.css template vendor _site/
           # Version the script and stylesheet so browsers never mix an old
           # copy of one with a new copy of the page.
           v=$(echo "$GITHUB_SHA" | cut -c1-7)
