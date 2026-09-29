@@ -152,11 +152,8 @@ input.pill::placeholder { color: var(--faint); }
 .connect { padding: 56px 40px 32px; }
 /* The start screen fills the window with the two cards in its middle. */
 .signin .connect { min-height: calc(100vh - 82px); min-height: calc(100dvh - 82px); display: flex; flex-direction: column; justify-content: center; }
-.pair { display: grid; grid-template-columns: minmax(0, 320px) minmax(60px, 180px) minmax(0, 320px); justify-content: center; align-items: stretch; }
+.pair { display: grid; grid-template-columns: minmax(0, 320px) minmax(60px, 180px) minmax(0, 320px); justify-content: center; align-items: center; }
 .node.cnode { position: relative; left: auto; top: auto; width: auto; animation: rise .5s both; display: flex; flex-direction: column; }
-/* The token fallback sits at the foot of the card, so both cards read the same way. */
-.cnode .token-alt { margin-top: auto; }
-.cnode .token-alt[open] { margin-top: 0; }
 .pair-wire { align-self: center; }
 .connect .pill { background: var(--card); }
 .cnode .box { display: grid; gap: 6px; padding: 8px; }
@@ -268,11 +265,10 @@ input.pill::placeholder { color: var(--faint); }
 .steps .dot { width: 6px; height: 6px; }
 .map { position: relative; padding: 10px 6px 6px; }
 .map .wires { z-index: 0; }
-/* Both cards in a row share its height, so their middle ports and the wire form one level line. */
-.map-grid { position: relative; display: grid; grid-template-columns: minmax(0, 290px) minmax(90px, 1fr) minmax(0, 290px); gap: 14px 0; align-items: stretch; justify-content: space-between; }
+/* Cards fit their content and are centred on each other, so each connection is level through their middles. */
+.map-grid { position: relative; display: grid; grid-template-columns: minmax(0, 290px) minmax(90px, 1fr) minmax(0, 290px); gap: 14px 0; align-items: center; justify-content: space-between; }
 .map-col-title { color: var(--muted); text-transform: uppercase; letter-spacing: .06em; padding: 0 8px 2px; }
-.mcell { min-width: 0; display: flex; }
-.mcell > .mnode { flex: 1; min-width: 0; }
+.mcell { min-width: 0; }
 /* Cards keep their column's width; long values end in an ellipsis. */
 .mnode .node-head h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mnode { position: relative; left: auto; top: auto; width: auto; z-index: 1; }
@@ -363,7 +359,6 @@ fieldset.seg input:checked + span { color: var(--text); box-shadow: inset 0 0 0 
   .map-hint, .map-col-title, .map-grid > div:nth-child(2) { display: none; }
   .map-grid { grid-template-columns: 1fr; gap: 0; }
   .mcell:empty { display: none; }
-  .mcell { display: block; }
   .mmid { min-height: 44px; position: relative; }
   .mmid:not(:empty)::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: var(--line); background: var(--text); }
   .mmid .mlabel { position: relative; }
