@@ -198,6 +198,7 @@ input.pill::placeholder { color: var(--faint); }
 .canvas-wrap::-webkit-scrollbar { display: none; }
 .canvas { position: relative; width: 900px; height: 500px; margin: 0 auto; }
 .wires { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.wires-top { z-index: 3; }
 
 .wire { fill: none; stroke: var(--text); stroke-width: var(--line); transition: stroke .4s; vector-effect: non-scaling-stroke; }
 .wire.idle, .wire.faded { stroke: var(--faint); stroke-dasharray: 2 4; }

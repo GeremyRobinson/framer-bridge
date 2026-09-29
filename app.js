@@ -511,6 +511,11 @@ function renderWires(p, m) {
   drawnFor = p.full;
   svg.setAttribute("viewBox", `0 0 ${CANVAS_W} ${CANVAS_H}`);
   svg.innerHTML = "";
+  // Ports and packets sit above the nodes, so a port reads as a whole dot on
+  // the node's edge and a packet stays visible right up to where it lands.
+  const top = overlay(svg);
+  top.setAttribute("viewBox", `0 0 ${CANVAS_W} ${CANVAS_H}`);
+  top.innerHTML = "";
   for (const w of wires) {
     const path = document.createElementNS(SVGNS, "path");
     path.id = w.id;
@@ -532,7 +537,7 @@ function renderWires(p, m) {
       c.setAttribute("r", 4.5);
       const st = /faded|idle/.test(w.cls) ? "idle" : "";
       c.setAttribute("class", `port ${st}`.trim());
-      svg.append(c);
+      top.append(c);
     }
     // Data packets travel along busy wires; a slow one shows Bridge is watching.
     if (/busy/.test(w.cls) || w.ambient) {
@@ -549,11 +554,35 @@ function renderWires(p, m) {
         const mp = document.createElementNS(SVGNS, "mpath");
         mp.setAttribute("href", `#${w.id}`);
         am.append(mp);
-        dot.append(am);
-        svg.append(dot);
+        dot.append(am, fadeAtEnds(secsLen, (i * secsLen) / packets));
+        top.append(dot);
       }
     }
   }
+}
+
+/** The layer above the nodes that belongs to a wires layer. */
+function overlay(svg) {
+  let top = svg.nextElementSibling?.classList.contains("wires-top") ? svg.nextElementSibling : null;
+  if (!top) {
+    top = document.createElementNS(SVGNS, "svg");
+    top.setAttribute("class", "wires wires-top");
+    top.setAttribute("aria-hidden", "true");
+    svg.after(top);
+  }
+  return top;
+}
+
+/** Packets fade in as they leave and out as they arrive, instead of popping. */
+function fadeAtEnds(dur, begin) {
+  const a = document.createElementNS(SVGNS, "animate");
+  a.setAttribute("attributeName", "opacity");
+  a.setAttribute("values", "0;1;1;0");
+  a.setAttribute("keyTimes", "0;0.12;0.88;1");
+  a.setAttribute("dur", `${dur}s`);
+  a.setAttribute("begin", `${begin}s`);
+  a.setAttribute("repeatCount", "indefinite");
+  return a;
 }
 
 /** A bright spark runs along a wire once, for a moment worth noticing. */
@@ -564,7 +593,7 @@ function spark(wireId) {
   dot.setAttribute("r", 5);
   dot.setAttribute("class", "spark");
   dot.innerHTML = `<animateMotion dur="0.9s" fill="freeze" begin="indefinite"><mpath href="#${wireId}"/></animateMotion>`;
-  svg.append(dot);
+  overlay(svg).append(dot);
   dot.firstElementChild.beginElement();
   setTimeout(() => dot.remove(), 1000);
 }
@@ -1311,6 +1340,8 @@ function drawMapWires() {
         dot.setAttribute("class", "runner-dot" + (st === "busy" ? " busy" : ""));
         const dur = st === "busy" ? 1.2 : 3.4;
         dot.innerHTML = `<animateMotion dur="${dur}s" begin="${(i * dur) / n}s" repeatCount="indefinite"><mpath href="#${path.id}"/></animateMotion>`;
+        dot.append(fadeAtEnds(dur, (i * dur) / n));
+        dot.setAttribute("opacity", "0");
         svg.append(dot);
       }
     }
