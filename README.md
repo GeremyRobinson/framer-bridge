@@ -63,6 +63,15 @@ destinations; when a pull changes a repo that is itself a source, it passes the
 news on. Unlinking removes those files (the copied folder stays), and removes
 the secret once a repo has no links left.
 
+## The map
+
+Every connection on the map is a cable: Framer sites in teal, linked repositories in
+violet, grey and dashed while there's nothing to do, red when it's failing. Drag across
+two or more cables on an empty part of the map to tie them into a bundle, drag a tie to
+slide it along the bundle, and double-click it to cut it. Ties are springy: when the
+layout shifts they swing after their cables and settle. They're kept in your browser.
+The cables are drawn by `cables.js`.
+
 Each project card shows four status lights:
 
 | Light | Meaning |

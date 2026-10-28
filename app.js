@@ -5,6 +5,7 @@
 // from an access token pasted on the start screen.
 
 import * as account from "./account.js";
+import { createCables } from "./cables.js";
 
 const API = "https://api.github.com";
 // What Bridge installs in a repo. The names only describe the site, so nothing
@@ -1475,9 +1476,11 @@ function renderMap() {
     } else if (l) {
       mid = linkLabel(l);
     }
+    // Every label rides on the middle of its cable (see drawMapWires).
+    if (mid) mid = mid.replace('class="mlabel', `data-wire="${wireId(p ? "mw-" + p.full : "ml-" + l.id)}" class="mlabel`);
     // Both ends already sit on other rows: the label floats on its wire instead.
     if (!s && !g) {
-      if (mid) floats += mid.replace('class="mlabel', `data-wire="${wireId(p ? "mw-" + p.full : "ml-" + l.id)}" class="mlabel float`);
+      if (mid) floats += mid.replace('class="mlabel', 'class="mlabel float');
       return "";
     }
     return `<div class="mcell fr">${s ? sourceNode(s) : ""}</div>` +
@@ -1508,68 +1511,72 @@ function renderMap() {
   tick();
 }
 
-let mapWiresSig = null;
+let cables = null;
 function drawMapWires() {
   const map = $("#map");
   const svg = $("#map-wires");
   if (!map || map.offsetParent === null) return;
-  if (getComputedStyle(svg).display === "none") return;
+  // On phones the map is a list with no cables: labels stay in their rows.
+  if (getComputedStyle(svg).display === "none") return $$(".mlabel[data-wire]", map).forEach((el) => { el.style.translate = ""; });
   // The centre of a port circle, or the node's side if it has none.
   const pt = (node, side) => {
     const port = $(side === "right" ? ".mport.out" : ".mport.in", node);
     const o = offsetIn(port || node, map);
     return port ? [o.x + o.w / 2, o.y + o.h / 2] : [side === "right" ? o.x + o.w : o.x, o.y + o.h / 2];
   };
+  // Framer sites carry the design; repository links carry content. Each kind of
+  // connection has its own cable colour.
   const conns = [
-    ...[...projects.values()].map((p) => ({ id: "mw-" + p.full, s: p.config.framerUrl, g: p.full, st: connState(p)[0] })),
-    ...allLinks().map((l) => ({ id: "ml-" + l.id, s: REPO_KEY + l.repo, g: l.dest, st: linkState(l.d)[0] })),
+    ...[...projects.values()].map((p) => ({ id: "mw-" + p.full, s: p.config.framerUrl, g: p.full, st: connState(p)[0], kind: "design" })),
+    ...allLinks().map((l) => ({ id: "ml-" + l.id, s: REPO_KEY + l.repo, g: l.dest, st: linkState(l.d)[0], kind: "content" })),
   ];
   const links = [];
   for (const c of conns) {
     const f = $(`.mnode.fr[data-source="${CSS.escape(c.s)}"]`, map);
     const g = $(`.mnode.gh[data-repo="${CSS.escape(c.g)}"]`, map);
     if (!f || !g) continue;
-    const [a, b] = [pt(f, "right"), pt(g, "left")];
-    links.push({ id: wireId(c.id), d: hCurve(a, b), st: c.st, mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] });
+    links.push({ id: wireId(c.id), a: pt(f, "right"), b: pt(g, "left"), st: c.st, kind: c.kind });
   }
-  // A floating label sits on the middle of its wire (a level curve's midpoint is halfway between its ends).
-  const grid = offsetIn($("#map-grid"), map);
-  for (const el of $$(".mlabel.float", map)) {
-    const l = links.find((x) => x.id === el.dataset.wire);
-    el.hidden = !l;
-    if (l) { el.style.left = `${l.mid[0] - grid.x}px`; el.style.top = `${l.mid[1] - grid.y}px`; }
-  }
-  // Rebuilding restarts the moving dots, so only rebuild when something changed.
-  const sig = `${map.offsetWidth}x${map.offsetHeight}` + JSON.stringify(links);
-  if (sig === mapWiresSig && svg.childElementCount) return;
-  mapWiresSig = sig;
   svg.setAttribute("viewBox", `0 0 ${map.offsetWidth} ${map.offsetHeight}`);
-  svg.innerHTML = "";
-  for (const l of links) {
-    const path = document.createElementNS(SVGNS, "path");
-    path.id = l.id;
-    path.setAttribute("d", l.d);
-    path.setAttribute("class", "wire" + (l.st === "busy" ? " busy" : l.st === "" ? " idle" : ""));
-    svg.append(path);
-    if (l.st === "ok" || l.st === "busy") {
-      const n = l.st === "busy" ? 3 : 1;
-      const dur = l.st === "busy" ? 1.8 : 3.6;
-      for (let i = 0; i < n; i++) {
-        const dot = document.createElementNS(SVGNS, "circle");
-        dot.setAttribute("r", 3);
-        dot.setAttribute("class", "runner-dot" + (l.st === "busy" ? " busy" : ""));
-        dot.setAttribute("opacity", "0");
-        const begin = -(i * dur) / n;
-        dot.innerHTML = `<animateMotion dur="${dur}s" begin="${begin}s" repeatCount="indefinite"><mpath href="#${l.id}"/></animateMotion>`;
-        dot.append(fadeAtEnds(dur, begin));
-        svg.append(dot);
+  if (!cables) {
+    cables = createCables(map, svg, store);
+    // Labels ride on their cables as they move: a floating label is placed on its cable,
+    // and a label in its row is shifted there from its place in the row. Each takes the
+    // first spot along its cable that no label placed before it covers, keeping the spot
+    // it had while that is still free, so labels don't jump between frames.
+    cables.onDraw = () => {
+      const grid = offsetIn($("#map-grid"), map);
+      const placed = [];
+      const free = (p, w, h) => placed.every((q) => Math.abs(p.x - q.x) * 2 > w + q.w + 4 || Math.abs(p.y - q.y) * 2 > h + q.h + 4);
+      // Measure every label before moving any, so the page is laid out once per frame.
+      const labels = $$(".mlabel[data-wire]", map).map((el) => ({ el, o: offsetIn(el, map), spots: cables.labelSpots(el.dataset.wire) }));
+      for (const { el, o, spots } of labels) {
+        if (!spots.length) { if (el.classList.contains("float")) el.hidden = true; continue; }
+        const { w, h } = o;
+        const keep = Number(el.dataset.spot) || 0;
+        let i = keep < spots.length && free(spots[keep], w, h) ? keep : spots.findIndex((p) => free(p, w, h));
+        if (i < 0) i = 0;
+        el.dataset.spot = i;
+        const mid = spots[i];
+        placed.push({ x: mid.x, y: mid.y, w, h });
+        if (el.classList.contains("float")) {
+          el.hidden = false;
+          el.style.left = `${mid.x - grid.x}px`; el.style.top = `${mid.y - grid.y}px`;
+        } else {
+          el.style.translate = `${(mid.x - o.x - w / 2).toFixed(1)}px ${(mid.y - o.y - h / 2).toFixed(1)}px`;
+        }
       }
-    }
+    };
   }
-  const drag = document.createElementNS(SVGNS, "path");
-  drag.id = "drag-wire";
-  drag.setAttribute("class", "wire");
-  svg.append(drag);
+  if (!$("#drag-wire", svg)) {
+    const drag = document.createElementNS(SVGNS, "path");
+    drag.id = "drag-wire";
+    drag.setAttribute("class", "wire");
+    svg.append(drag);
+  }
+  // Ties are kept per person.
+  cables.setStoreKey(`framer-bridge:ties:${me?.login || "local"}`);
+  cables.update(links);
 }
 
 // Redraw the map's wires whenever its layout shifts (fonts loading, text changing, resizing).
