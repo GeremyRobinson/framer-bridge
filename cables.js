@@ -44,9 +44,11 @@ function intersect(p1, p2, p3, p4) {
 /**
  * map: the element the cables are drawn over (coordinates are relative to it).
  * svg: an <svg> filling it. store: { get(key), set(key, value) }.
- * Returns { update(links), midpoint(id), setStoreKey(key), onDraw }.
+ * Options, for a map that can be panned and zoomed: events, the element that takes the
+ * pointer (default: map), and scale(), how far map is zoomed (default: 1).
+ * Returns { update(links), labelSpots(id), setStoreKey(key), onDraw }.
  */
-export function createCables(map, svg, store) {
+export function createCables(map, svg, store, { events = map, scale = () => 1 } = {}) {
   const gCables = el("g"), gTies = el("g"), gRunners = el("g"), gCut = el("g");
   svg.prepend(gCables, gTies, gRunners, gCut);
   const hint = document.createElement("div");
@@ -319,12 +321,12 @@ export function createCables(map, svg, store) {
 
   // ------------------------------------------------------------ pointer
   const toMap = (e) => {
-    const r = map.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top };
+    const r = map.getBoundingClientRect(), k = scale();
+    return { x: (e.clientX - r.left) / k, y: (e.clientY - r.top) / k };
   };
   const busyTarget = (e) => e.target.closest(".mnode, .mlabel, button, a, input, select, label, form");
 
-  map.addEventListener("pointerdown", (e) => {
+  events.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || !visible() || busyTarget(e)) return;
     const p = toMap(e);
     const t = tieAt(p);
@@ -340,15 +342,15 @@ export function createCables(map, svg, store) {
       e.preventDefault();
       drag = { type: "cut", s: p, e: p };
       gCut.innerHTML = '<line class="cut-line"></line>';
-      map.classList.add("cutting");
+      events.classList.add("cutting");
     } else return;
-    map.setPointerCapture(e.pointerId);
+    events.setPointerCapture(e.pointerId);
     wake();
   });
-  map.addEventListener("pointermove", (e) => {
+  events.addEventListener("pointermove", (e) => {
     const p = toMap(e);
     if (!drag) {
-      if (!busyTarget(e)) map.classList.toggle("over-tie", Boolean(tieAt(p)));
+      if (!busyTarget(e)) events.classList.toggle("over-tie", Boolean(tieAt(p)));
       return;
     }
     if (drag.type === "tie") {
@@ -388,12 +390,12 @@ export function createCables(map, svg, store) {
       makeTie(crossings(drag.s, drag.e));
       gCut.innerHTML = "";
       hint.hidden = true;
-      map.classList.remove("cutting");
+      events.classList.remove("cutting");
     }
     drag = null;
   };
-  map.addEventListener("pointerup", end);
-  map.addEventListener("pointercancel", end);
+  events.addEventListener("pointerup", end);
+  events.addEventListener("pointercancel", end);
 
   // ------------------------------------------------------------ the app's side
   /** links: [{ id, a: [x, y], b: [x, y], kind, st }], the map's connections as laid out now. */
